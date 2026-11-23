@@ -44,9 +44,34 @@ def for_platform(items, platform=None):
     return out
 
 
-def load_manifest(kit, platform=None):
+def test_builds_on(kit):
+    """The 'Get test builds (pre-releases)' setting (config.json in the kit folder)."""
+    try:
+        with open(os.path.join(kit, "config.json"), encoding="utf-8-sig") as handle:
+            return bool(json.load(handle).get("test_builds"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def channel_of(item):
+    """'stable' (the default) or 'beta'. A beta item is offered only to players who switched on 'Get test builds' (or who
+    already have it installed, so they can still update or remove it), and it follows the newest release including
+    pre-releases."""
+    return "beta" if item.get("channel") == "beta" else "stable"
+
+
+def for_channel(items, kit, test_builds=None):
+    if test_builds is None:
+        test_builds = test_builds_on(kit)
+    if test_builds:
+        return list(items)
+    state = load_state(kit)
+    return [i for i in items if channel_of(i) != "beta" or i["id"] in state]
+
+
+def load_manifest(kit, platform=None, test_builds=None):
     with open(os.path.join(kit, "thirdparty.json"), encoding="utf-8-sig") as handle:
-        return for_platform(json.load(handle)["items"], platform)
+        return for_channel(for_platform(json.load(handle)["items"], platform), kit, test_builds)
 
 
 def state_path(kit):
@@ -342,7 +367,7 @@ def resolve(item, fetch=_get):
     kind = source["type"]
     if kind == "github_release":
         tag = source.get("tag", "latest")
-        if tag == "latest" and source.get("prereleases"):
+        if tag == "latest" and (source.get("prereleases") or channel_of(item) == "beta"):
             # GitHub's releases/latest skips pre-releases: take the newest published one, test builds included
             releases = [r for r in json.loads(fetch(API + source["repo"] + "/releases?per_page=20")) if not r.get("draft")]
             if not releases:
@@ -748,7 +773,7 @@ def latest_version(item, fetch=_get):
     if source["type"] != "github_release":
         return None
     try:
-        if source.get("prereleases"):
+        if source.get("prereleases") or channel_of(item) == "beta":
             releases = [r for r in json.loads(fetch(API + source["repo"] + "/releases?per_page=20")) if not r.get("draft")]
             return releases[0]["tag_name"] if releases else None
         return json.loads(fetch(API + source["repo"] + "/releases/latest")).get("tag_name")
