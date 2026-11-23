@@ -371,6 +371,12 @@ class RulesPage(SettingsPage):
         self.profile.configure(values=core.list_profiles(G.HERE))
         self.profile.set(self.tab.profile.get())
 
+    def extend_card(self, name, card):
+        if name == "Party buffs":
+            # shown only while Extended is picked (refresh() puts it in and takes it out)
+            self.buff_warning = tk.Label(card.body, text=st.BUFF_RANGE_WARNING, bg=PANEL, fg=GOLD, font=(UI_FONT, 9),
+                                         anchor="w", justify="left", wraplength=300)
+
     def build_bottom(self):
         line = tk.Frame(self.body, bg=BG)
         line.pack(fill="x", pady=(2, 0))
@@ -399,6 +405,13 @@ class RulesPage(SettingsPage):
         for name, card in self.preset_cards.items():
             card.set_selected(name == now)
         self.custom_mark.configure(text="" if now else "YOUR OWN RATES")
+        warning = getattr(self, "buff_warning", None)
+        if warning is not None:
+            if rates.get("buff_range") == "extended":
+                if not warning.winfo_manager():
+                    warning.pack(fill="x", pady=(2, 0))
+            else:
+                warning.pack_forget()
         missing = st.missing_keys(rates)
         self.missing.configure(text=f"{len(missing)} newer setting(s) are only on the classic list for now." if missing else "")
 
