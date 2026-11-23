@@ -191,7 +191,8 @@ class ThirdPartyTests(unittest.TestCase):
         # on Windows an open zip cannot be deleted: the downloads folder could not be cleaned up
         url = "https://github.com/AshitaXI/Ashita-v4beta/archive/%s.zip" % self.items["ashita"]["source"]["ref"]
         data = zip_of({"Ashita-v4beta-x/Ashita-cli.exe": "new"})
-        tp.install(self.items["ashita"], self.kit, self.ash, fetch=self.fake({}, {url: data}), log=lambda m: None)
+        tp.install(self.items["ashita"], self.kit, self.ash, fetch=self.fake({}, {url: data}), log=lambda m: None,
+                   keep_download=True)                    # (the install deletes its download unless asked to keep it)
         folder = os.path.join(self.kit, "downloads", "ashita")
         for name in os.listdir(folder):
             os.remove(os.path.join(folder, name))          # would raise PermissionError on Windows if still open
@@ -313,6 +314,76 @@ class ThirdPartyTests(unittest.TestCase):
             tp.stream_to_file("u/y", os.path.join(self.kit, "y.zip"), chunk=1000)
         self.assertEqual(os.listdir(self.kit).count("y.zip"), 0)
         self.assertEqual(os.listdir(self.kit).count("y.zip.part"), 0)
+
+    # ---- (v0.3.3 launcher fixes) downloads/ is cleaned up ----
+    def release_for(self, dll):
+        release = {"tag_name": "v9", "assets": [{"name": "XIUIplus.dll", "browser_download_url": "u/dll"},
+                                                {"name": "SHA256SUMS.txt", "browser_download_url": "u/sums"}]}
+        return release, {"u/dll": dll, "u/sums": (hashlib.sha256(dll).hexdigest() + "  XIUIplus.dll\n").encode()}
+
+    def test_download_is_deleted_after_a_good_install(self):
+        release, files = self.release_for(b"MZ fake dll")
+        tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, files), log=lambda m: None)
+        self.assertTrue(os.path.exists(os.path.join(self.ash, "plugins", "XIUIplus.dll")))
+        self.assertFalse(os.path.exists(os.path.join(self.kit, "downloads", "xiuiplus")))
+
+    def test_download_is_kept_when_asked(self):
+        release, files = self.release_for(b"MZ fake dll")
+        tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, files), log=lambda m: None, keep_download=True)
+        self.assertTrue(os.path.exists(os.path.join(self.kit, "downloads", "xiuiplus", "XIUIplus.dll")))
+
+    def test_nothing_is_left_after_a_refused_install(self):
+        release, files = self.release_for(b"MZ fake dll")
+        files["u/dll"] = b"changed"
+        with self.assertRaises(RuntimeError):
+            tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, files), log=lambda m: None)
+        self.assertFalse(os.path.exists(os.path.join(self.kit, "downloads", "xiuiplus")))
+
+    @unittest.skipUnless(os.name == "nt", "a Windows installer is started with os.startfile")
+    def test_an_installer_that_is_still_open_keeps_its_file(self):
+        item = {"id": "setup", "name": "Setup", "source": {"type": "installer", "url": "https://example.test/setup.exe"},
+                "into": "kit"}
+        opened = []
+        os.startfile = lambda path: opened.append(path)        # (only on Windows, so only here)
+        try:
+            tp.install(item, self.kit, self.ash, fetch=lambda url, timeout=60: b"MZ", log=lambda m: None)
+        finally:
+            del os.startfile
+        self.assertEqual(len(opened), 1)
+        self.assertTrue(os.path.exists(opened[0]))
+
+    def test_a_quiet_installer_is_deleted_after_it_ran(self):
+        item = {"id": "quiet", "name": "Quiet", "source": {"type": "installer", "url": "https://example.test/q.exe", "wait": True},
+                "into": "kit"}
+        ran = []
+        run = lambda cmd: ran.append(cmd) or type("R", (), {"returncode": 0})()
+        tp.install(item, self.kit, self.ash, fetch=lambda url, timeout=60: b"MZ", log=lambda m: None, run=run)
+        self.assertEqual(len(ran), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.kit, "downloads", "quiet")))
+
+    def test_old_leftovers_are_pruned_and_new_ones_and_updates_stay(self):
+        base = os.path.join(self.kit, "downloads")
+        now = time.time()
+        for name, age in (("old", 30), ("recent", 1), ("updates", 90)):
+            os.makedirs(os.path.join(base, name))
+            path = os.path.join(base, name, "f.bin")
+            with open(path, "wb") as handle:
+                handle.write(b"x" * 2048)
+            os.utime(path, (now - age * 86400, now - age * 86400))
+        said = []
+        freed = tp.prune_downloads(self.kit, days=7, log=said.append, now=now)
+        self.assertEqual(freed, 2048)
+        self.assertEqual(sorted(os.listdir(base)), ["recent", "updates"])
+        self.assertTrue(said)
+        self.assertEqual(tp.prune_downloads(self.kit, days=7, log=said.append, now=now), 0)
+
+    def test_clean_download_never_leaves_the_downloads_folder(self):
+        outside = os.path.join(self.kit, "keepme")
+        os.makedirs(outside)
+        os.makedirs(os.path.join(self.kit, "downloads"))
+        self.assertEqual(tp.clean_download(self.kit, "../keepme"), 0)
+        self.assertEqual(tp.clean_download(self.kit, ""), 0)
+        self.assertTrue(os.path.isdir(outside))
 
 
 if __name__ == "__main__":

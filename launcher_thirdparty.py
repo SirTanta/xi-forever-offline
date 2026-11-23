@@ -746,8 +746,57 @@ def _extract_with_system_tar(archive_path, dest):
         raise RuntimeError("Unpacking failed: " + (done.stderr or "")[-300:])
 
 
-def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
-    """Downloads and installs one item. Returns the version installed."""
+def clean_download(kit, item_id):
+    """Deletes downloads/<id>/ (the file an install fetched and has used). Returns the bytes freed."""
+    base = os.path.realpath(os.path.join(kit, "downloads"))
+    folder = os.path.realpath(os.path.join(base, item_id))
+    if not item_id or os.path.dirname(folder) != base or not os.path.isdir(folder):
+        return 0
+    freed = sum(os.path.getsize(os.path.join(top, name)) for top, _dirs, names in os.walk(folder) for name in names
+                if os.path.exists(os.path.join(top, name)))
+    shutil.rmtree(folder, ignore_errors=True)
+    return freed
+
+
+def prune_downloads(kit, days=7, log=print, now=None):
+    """What an install left behind (an installer that was still running when the launcher stopped looking at it, a
+    download that broke): every downloads/<id>/ folder nothing has touched for `days` days is deleted. The folder
+    downloads/updates is the launcher's own update files and is tidied by launcher_update. Returns the bytes freed."""
+    base = os.path.join(kit, "downloads")
+    if not os.path.isdir(base):
+        return 0
+    limit = (now or time.time()) - days * 86400
+    freed = 0
+    for name in os.listdir(base):
+        folder = os.path.join(base, name)
+        if name == "updates" or not os.path.isdir(folder) or os.path.islink(folder):
+            continue
+        stamps = [os.path.getmtime(os.path.join(top, n)) for top, _dirs, names in os.walk(folder) for n in names]
+        if stamps and max(stamps) > limit:
+            continue
+        freed += clean_download(kit, name)
+        if os.path.isdir(folder) and not os.listdir(folder):      # an empty folder is only clutter
+            os.rmdir(folder)
+    if freed:
+        log(f"Removed old downloads ({max(1, freed // (1024 * 1024))} MB).")
+    return freed
+
+
+def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None, keep_download=False):
+    """Downloads and installs one item. Returns the version installed. The downloaded file is deleted afterwards
+    (keep_download=True keeps it); an installer that is still open on the player's screen is left alone."""
+    started = []
+    try:
+        return _install(item, kit, ashita, fetch, log, server, run, started)
+    finally:
+        if not keep_download and not started:
+            try:
+                clean_download(kit, item["id"])
+            except OSError:
+                pass
+
+
+def _install(item, kit, ashita, fetch, log, server, run, started):
     if item["source"]["type"] == "ollama_model":
         pull_model(item["source"]["model"], log=log)
         return item["source"]["model"]
@@ -785,6 +834,7 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
                 raise RuntimeError(f"{item['name']}: the installer stopped with code {result.returncode}.")
         elif os.name == "nt":
             os.startfile(path)                     # Windows: the installer asks the player itself
+            started.append(path)                   # (it is still running: its file stays until the next tidy)
         else:
             raise RuntimeError(f"{item['name']} is a Windows installer.")
     else:

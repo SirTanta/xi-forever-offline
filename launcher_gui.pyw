@@ -4188,7 +4188,8 @@ class App(tk.Tk):
         def work():
             # (Altair 2026-11-19: Reinstall / update showed nothing, its lines only went to the LOGS panel on the Play page)
             try:
-                version = tp.install(item, HERE, self.ashita, log=self.say, server=self.cfg.get("server_dir"))
+                version = tp.install(item, HERE, self.ashita, log=self.say, server=self.cfg.get("server_dir"),
+                                     keep_download=bool(self.cfg.get("keep_downloads", False)))
                 done = f"{item['name']} {version} is ready."
             except Exception as e:
                 done = f"{item['name']}: not installed ({e})."
@@ -4570,6 +4571,11 @@ class App(tk.Tk):
             _upd.prune_updates(HERE, log=self.say)
         except Exception as e:
             self.say(f"Could not tidy the old update downloads ({e}).")
+        try:                                  # downloads/<id> folders an install left behind (nothing touched them for 7 days)
+            if not cfg.get("keep_downloads"):
+                tp.prune_downloads(HERE, log=self.say)
+        except Exception as e:
+            self.say(f"Could not tidy the old downloads ({e}).")
 
         try:                                  # (2026-11-19) Gambits -> autobox, GambitsV2 -> Gambits: once, every install
             import launcher_setup as _names
