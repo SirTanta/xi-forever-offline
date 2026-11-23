@@ -384,10 +384,45 @@ def ssl_context():
     return _SSL_CONTEXT
 
 
+def _open_url(url, timeout=60, headers=None):
+    """The open connection to a URL (use it in a `with`). The one place the launcher's downloads go through."""
+    request = urllib.request.Request(url, headers=dict({"User-Agent": USER_AGENT}, **(headers or {})))
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
+
+
 def _get(url, timeout=60):
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
+    """A small answer (a GitHub page of release data, a checksum file) as bytes. Big files go through stream_to_file."""
+    with _open_url(url, timeout, {"Accept": "application/vnd.github+json"}) as response:
         return response.read()
+
+
+def stream_to_file(url, path, sha256=None, mismatch="The download does not match its published checksum - not installed.",
+                   chunk=1 << 20, timeout=600):
+    """Saves a download to disk a piece at a time (never the whole file in memory: the server zip is hundreds of MB),
+    working out its SHA-256 on the way. The data goes to <path>.part first; when `sha256` is given and does not match,
+    the part file is deleted and nothing is left at `path`. Returns the SHA-256 of what was saved."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    part = path + ".part"
+    digest = hashlib.sha256()
+    try:
+        with _open_url(url, timeout) as response, open(part, "wb") as handle:
+            while True:
+                block = response.read(chunk)
+                if not block:
+                    break
+                handle.write(block)
+                digest.update(block)
+        actual = digest.hexdigest()
+        if sha256 and actual != sha256.lower():
+            raise RuntimeError(mismatch)
+        os.replace(part, path)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
+    return actual
 
 
 def resolve(item, fetch=_get):
@@ -473,11 +508,15 @@ def download(item, kit, found, fetch=_get):
         return path
     folder = os.path.join(kit, "downloads", item["id"])
     os.makedirs(folder, exist_ok=True)
-    data = fetch(found["url"], timeout=600)
+    path = os.path.join(folder, found["name"])
+    if fetch is _get:                              # the real thing: straight to disk, a piece at a time
+        found["sha256_actual"] = stream_to_file(found["url"], path, found.get("sha256"),
+                                                  mismatch=f"{item['name']}: the download does not match its published checksum - not installed.")
+        return path
+    data = fetch(found["url"], timeout=600)        # a stand-in fetch (the tests) hands over the bytes
     actual = hashlib.sha256(data).hexdigest()
     if found.get("sha256") and actual != found["sha256"]:
         raise RuntimeError(f"{item['name']}: the download does not match its published checksum - not installed.")
-    path = os.path.join(folder, found["name"])
     with open(path, "wb") as handle:
         handle.write(data)
     found["sha256_actual"] = actual
@@ -633,10 +672,7 @@ def download_file(url, path, log=print, sha256=None, sha512=None, fetch=None, ch
     elif not os.path.exists(path):
         part = path + ".part"
         have = os.path.getsize(part) if os.path.exists(part) else 0
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        if have:
-            request.add_header("Range", f"bytes={have}-")
-        with urllib.request.urlopen(request, timeout=60, context=ssl_context()) as response:
+        with _open_url(url, 60, {"Range": f"bytes={have}-"} if have else None) as response:
             if have and getattr(response, "status", 200) != 206:
                 have = 0
             total = have + int(response.headers.get("Content-Length") or 0)

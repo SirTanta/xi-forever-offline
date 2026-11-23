@@ -1,5 +1,5 @@
 """Offline checks for launcher_thirdparty.py: no network, a stand-in GitHub. Run: python test_thirdparty.py"""
-import hashlib, io, json, os, shutil, sys, tempfile, unittest, zipfile
+import hashlib, io, json, os, shutil, sys, tempfile, time, unittest, urllib.error, zipfile
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, KIT)
 import launcher_thirdparty as tp
@@ -11,6 +11,23 @@ def zip_of(files):
         for name, data in files.items():
             z.writestr(name, data)
     return buf.getvalue()
+
+
+class FakeResponse:
+    """A stand-in for an open connection: remembers how much was asked for in one read (a read with no size would mean
+    the whole file in memory)."""
+    def __init__(self, data, headers=None):
+        self.buf, self.reads, self.headers = io.BytesIO(data), [], headers or {}
+
+    def read(self, size=None):
+        self.reads.append(size)
+        return self.buf.read() if size is None else self.buf.read(size)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class ThirdPartyTests(unittest.TestCase):
@@ -244,6 +261,58 @@ class ThirdPartyTests(unittest.TestCase):
         bad = lambda url, timeout=60: sums if url == "u/s" else (zipped + b"!" if url == "u/z" else fetch(url))
         with self.assertRaises(RuntimeError):
             tp.install(item, self.kit, self.ash, fetch=bad, log=lambda m: None)
+
+    # ---- (v0.3.3 launcher fixes) a download goes to disk a piece at a time, never whole into memory ----
+    def with_connection(self, answers):
+        """tp._open_url answers {url: bytes or an exception}; returns the list of FakeResponses handed out."""
+        handed, real = [], tp._open_url
+
+        def fake(url, timeout=60, headers=None):
+            answer = answers[url]
+            if isinstance(answer, BaseException):
+                raise answer
+            response = FakeResponse(answer)
+            handed.append(response)
+            return response
+        tp._open_url = fake
+        self.addCleanup(setattr, tp, "_open_url", real)
+        return handed
+
+    def test_download_is_read_in_pieces_not_whole(self):
+        data = os.urandom(3 * (1 << 20) + 17)
+        handed = self.with_connection({"u/big": data})
+        found = {"url": "u/big", "name": "big.zip", "sha256": hashlib.sha256(data).hexdigest()}
+        path = tp.download({"id": "big", "name": "Big"}, self.kit, found, tp._get)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), data)
+        self.assertNotIn(None, handed[0].reads)                       # never "read everything"
+        self.assertLessEqual(max(r for r in handed[0].reads), 1 << 20)
+        self.assertGreaterEqual(len(handed[0].reads), 4)
+        self.assertEqual(found["sha256_actual"], hashlib.sha256(data).hexdigest())
+        self.assertFalse(os.path.exists(path + ".part"))
+
+    def test_streamed_download_that_does_not_match_leaves_nothing(self):
+        self.with_connection({"u/x": b"tampered"})
+        found = {"url": "u/x", "name": "x.zip", "sha256": hashlib.sha256(b"the real one").hexdigest()}
+        with self.assertRaises(RuntimeError) as caught:
+            tp.download({"id": "x", "name": "Xthing"}, self.kit, found, tp._get)
+        self.assertIn("does not match its published checksum", str(caught.exception))
+        self.assertEqual(os.listdir(os.path.join(self.kit, "downloads", "x")), [])      # no file, no .part
+
+    def test_streamed_download_that_breaks_half_way_leaves_nothing(self):
+        class Breaks(FakeResponse):
+            def read(self, size=None):
+                data = super().read(size)
+                if len(self.reads) > 1:
+                    raise OSError("connection reset")
+                return data
+        real = tp._open_url
+        tp._open_url = lambda url, timeout=60, headers=None: Breaks(b"y" * 5000)
+        self.addCleanup(setattr, tp, "_open_url", real)
+        with self.assertRaises(OSError):
+            tp.stream_to_file("u/y", os.path.join(self.kit, "y.zip"), chunk=1000)
+        self.assertEqual(os.listdir(self.kit).count("y.zip"), 0)
+        self.assertEqual(os.listdir(self.kit).count("y.zip.part"), 0)
 
 
 if __name__ == "__main__":
