@@ -4046,6 +4046,7 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
         self.dl_busy = False
         self.show_downloads()
+        self.after(5000, self.check_downloads_quietly)
 
     def show_downloads(self, newer=None):
         for widget in self.dl_rows.winfo_children():
@@ -4237,22 +4238,37 @@ class App(tk.Tk):
                 self.say(f"Era-DATs: not installed ({e}).")
         threading.Thread(target=work, daemon=True).start()
 
-    def check_download_updates(self):
+    def check_download_updates(self, quiet=False):
+        """The "Check for newer versions" button (always asks GitHub), and the quiet check at launcher start (quiet=True:
+        asks at most every 6 hours, speaks only in the log, never in a pop-up)."""
         def work():
             try:
                 items = tp.load_manifest(HERE)
                 versions = tp.installed_versions(items, HERE, self.ashita, self.cfg.get("server_dir"))
-                newer, problems = tp.check_updates(items, versions)
+                newer, problems, asked = tp.check_downloads(HERE, items, versions, force=not quiet)
             except Exception as e:
-                newer, problems = {}, [f"The check stopped: {e}"]
+                newer, problems, asked = {}, [f"The check stopped: {e}"], True
             for line in problems:                 # (a limit GitHub sets, no network, ...) said out loud, never "nothing newer"
                 self.say(line)
-            self.say("Checked the release pages for newer versions." if not problems else
-                     "The check for newer versions could not be finished (see above).")
-            if problems:
-                self.after(0, lambda: messagebox.showinfo("Check for newer versions", "\n\n".join(problems)))
-            self.after(0, lambda: self.show_downloads(newer))
+            if quiet:
+                if newer:
+                    names = {i["id"]: i["name"] for i in items}
+                    self.say("Newer versions are out for: " + ", ".join(names.get(k, k) for k in newer)
+                             + " (Downloads: Reinstall / update).")
+            else:
+                self.say("Checked the release pages for newer versions." if not problems else
+                         "The check for newer versions could not be finished (see above).")
+                if problems:
+                    self.after(0, lambda: messagebox.showinfo("Check for newer versions", "\n\n".join(problems)))
+            if not quiet or asked or newer:
+                self.after(0, lambda: self.show_downloads(newer))
         threading.Thread(target=work, daemon=True).start()
+
+    def check_downloads_quietly(self):
+        """At launcher start (player installs, like the launcher's own update check): are there newer versions of the
+        downloads the player has installed? Off with "check_downloads_on_start": false in config.json."""
+        if self.cfg.get("check_downloads_on_start", True) and self.cfg.get("mariadb_dir"):
+            self.check_download_updates(quiet=True)
 
     def add_note(self, tabs, title, text):
         page = tk.Frame(tabs, bg=BG)

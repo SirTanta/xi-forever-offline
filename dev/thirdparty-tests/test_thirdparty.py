@@ -552,7 +552,7 @@ class ThirdPartyTests(unittest.TestCase):
         with open(os.path.join(KIT, "launcher_gui.pyw"), encoding="utf-8") as handle:
             source = handle.read()
         body = source[source.index("def check_download_updates"):source.index("def add_note")]
-        self.assertIn("tp.check_updates(", body)
+        self.assertIn("tp.check_downloads(", body)
         self.assertIn("for line in problems", body)
         self.assertIn("messagebox.showinfo", body)
 
@@ -605,6 +605,83 @@ class ThirdPartyTests(unittest.TestCase):
                              ("launcher_pages.py", "G.tp.is_newer(newest, version)")):
             with open(os.path.join(KIT, name), encoding="utf-8") as handle:
                 self.assertIn(needle, handle.read(), name)
+
+    # ---- (v0.3.3 launcher fixes) the downloads are checked for newer versions when the launcher starts ----
+    def two_items(self):
+        a = {"id": "aa", "name": "AA", "source": {"type": "github_release", "repo": "x/aa", "tag": "latest", "asset": "a"}}
+        b = {"id": "bb", "name": "BB", "source": {"type": "github_release", "repo": "x/bb", "tag": "latest", "asset": "b"}}
+        return [a, b]
+
+    def counting_fetch(self, answers):
+        asked = []
+
+        def fetch(url, timeout=60):
+            asked.append(url)
+            return json.dumps({"tag_name": answers[next(r for r in answers if r in url)]}).encode()
+        return fetch, asked
+
+    def test_an_item_pinned_to_a_tested_version_is_never_offered_a_newer_one(self):
+        asked = []
+        fetch = lambda url, timeout=60: asked.append(url) or b'{"tag_name": "v9.9"}'
+        self.assertEqual(self.items["chains"]["source"]["tag"], "v0.86")
+        self.assertIsNone(tp.latest_version(self.items["chains"], fetch))
+        self.assertEqual(asked, [])
+        self.assertEqual(tp.latest_version(self.items["xiuiplus"], fetch), "v9.9")
+        del asked[:]
+        newer, problems = tp.check_updates([self.items["chains"]], {"chains": "v0.86"}, fetch)
+        self.assertEqual((newer, problems, asked), ({}, [], []))
+
+    def test_start_check_asks_github_at_most_every_six_hours(self):
+        items = self.two_items()
+        fetch, asked = self.counting_fetch({"x/aa": "v2", "x/bb": "v2"})
+        versions = {"aa": "v1", "bb": "v1"}
+        now = 1_000_000.0
+        newer, problems, did = tp.check_downloads(self.kit, items, versions, fetch, now=now)
+        self.assertEqual((newer, problems, did, len(asked)), ({"aa": "v2", "bb": "v2"}, [], True, 2))
+        # ten more starts within the six hours: no new requests, the same answer
+        for start in range(10):
+            newer, problems, did = tp.check_downloads(self.kit, items, versions, fetch, now=now + 60 * (start + 1))
+            self.assertEqual((newer, did, len(asked)), ({"aa": "v2", "bb": "v2"}, False, 2))
+        # an item updated in between is no longer listed
+        newer, _problems, _did = tp.check_downloads(self.kit, items, {"aa": "v2", "bb": "v1"}, fetch, now=now + 3600)
+        self.assertEqual(newer, {"bb": "v2"})
+        # the button always asks; six hours later the start asks again
+        self.assertTrue(tp.check_downloads(self.kit, items, versions, fetch, force=True, now=now + 100)[2])
+        self.assertTrue(tp.check_downloads(self.kit, items, versions, fetch, now=now + 100 + 6 * 3600 + 1)[2])
+
+    def test_start_check_survives_a_damaged_answer_file(self):
+        items = self.two_items()
+        fetch, asked = self.counting_fetch({"x/aa": "v2", "x/bb": "v1"})
+        for text in ("{not json", "[]", '{"at": "yesterday", "newer": 5}'):
+            with open(os.path.join(self.kit, tp.CHECK_FILE), "w") as handle:
+                handle.write(text)
+            newer, problems, did = tp.check_downloads(self.kit, items, {"aa": "v1", "bb": "v1"}, fetch, now=5000.0)
+            self.assertEqual((newer, problems, did), ({"aa": "v2"}, [], True), text)
+
+    def test_start_check_that_hit_the_limit_does_not_knock_again_for_hours(self):
+        items = self.two_items()
+        calls = []
+
+        def fetch(url, timeout=60):
+            calls.append(url)
+            raise tp.RateLimited("GitHub is limiting this connection for a while.")
+        newer, problems, did = tp.check_downloads(self.kit, items, {"aa": "v1", "bb": "v1"}, fetch, now=1000.0)
+        self.assertEqual((newer, did, len(calls)), ({}, True, 1))
+        self.assertIn("limiting this connection", problems[0])
+        tp.check_downloads(self.kit, items, {"aa": "v1", "bb": "v1"}, fetch, now=1000.0 + 600)
+        self.assertEqual(len(calls), 1)
+
+    def test_the_start_check_is_wired_to_the_launcher_and_can_be_switched_off(self):
+        with open(os.path.join(KIT, "launcher_gui.pyw"), encoding="utf-8") as handle:
+            source = handle.read()
+        body = source[source.index("def check_downloads_quietly"):source.index("def add_note")]
+        self.assertIn('self.cfg.get("check_downloads_on_start", True)', body)       # on unless config.json says false
+        self.assertIn('self.cfg.get("mariadb_dir")', body)                          # a player install, like the launcher's own check
+        self.assertIn("self.after(5000, self.check_downloads_quietly)", source)
+        self.assertNotIn("messagebox", body.split("def check_downloads_quietly")[1])
+        quiet = source[source.index("def check_download_updates"):source.index("def check_downloads_quietly")]
+        self.assertIn("if quiet:", quiet)
+        self.assertIn("force=not quiet", quiet)
 
 
 if __name__ == "__main__":

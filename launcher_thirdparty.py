@@ -1022,9 +1022,9 @@ def uninstall(item, kit, ashita, server=None, log=print):
 
 
 def latest_version(item, fetch=_get, strict=False):
-    """The newest release tag for a GitHub release item (to offer an update), or None. An answer that could not be had
-    is None, except that "GitHub is limiting this connection" is always raised (RateLimited), and with strict=True every
-    error is."""
+    """The newest release tag for a GitHub release item (to offer an update), or None. An item pinned to a tested
+    version has nothing newer to offer. An answer that could not be had is None, except that "GitHub is limiting this
+    connection" is always raised (RateLimited), and with strict=True every error is."""
     source = item["source"]
     if source["type"] != "github_release":
         return None
@@ -1088,7 +1088,7 @@ def installed_versions(items, kit, ashita, server=None, state=None):
 
 def check_updates(items, versions, fetch=_get):
     """Asks GitHub which installed downloads have a newer release: ({item id: newer tag}, [what went wrong]).
-    `versions` is installed_versions(). Items that are not installed are not asked about; one answer is
+    `versions` is installed_versions(). Items that are not installed or are pinned are not asked about; one answer is
     asked for once however many items share a repository. When GitHub starts limiting this connection the check stops
     there and says so (the rest were not checked), instead of showing "nothing newer" for all of them."""
     newer, problems, answers = {}, [], {}
@@ -1111,6 +1111,34 @@ def check_updates(items, versions, fetch=_get):
         if tag and is_newer(tag, versions[item["id"]]):
             newer[item["id"]] = tag
     return newer, problems
+
+
+CHECK_FILE = "thirdparty-check.json"
+
+
+def check_downloads(kit, items, versions, fetch=_get, force=False, now=None, every=6 * 3600):
+    """check_updates, but asking GitHub at most once every `every` seconds unless force: the last answer is kept in
+    thirdparty-check.json, so starting the launcher ten times does not use up the 60 requests an hour. Returns
+    (newer, problems, asked): `newer` is always only what is still newer than what is installed now."""
+    now = time.time() if now is None else now
+    path = os.path.join(kit, CHECK_FILE)
+    try:
+        with open(path, encoding="utf-8-sig") as handle:
+            last = json.load(handle)
+        if not isinstance(last, dict):
+            last = {}
+    except (OSError, ValueError):
+        last = {}
+    if not force and isinstance(last.get("at"), (int, float)) and 0 <= now - last["at"] < every:
+        known = last.get("newer") if isinstance(last.get("newer"), dict) else {}
+        return {k: v for k, v in known.items() if k in versions and is_newer(v, versions[k])}, [], False
+    newer, problems = check_updates(items, versions, fetch)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump({"at": now, "newer": newer}, handle, indent=2)
+    except OSError:
+        pass
+    return newer, problems, True
 
 
 def credits_lines(kit):

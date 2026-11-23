@@ -1279,7 +1279,7 @@ def add_list_downloads(app):
     older = app.show_downloads
 
     def show_downloads(newer=None):         # after an install, an update or a version check: Get more and both lists again
-        if newer:
+        if newer is not None:               # (an empty answer clears the "newer" marks: nothing is newer any more)
             downloads.newer = dict(newer)
         older(newer)
         for lst in app.lists:
