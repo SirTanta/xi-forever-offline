@@ -29,6 +29,7 @@
 !/launcher_setup.py
 !/launcher_update.py
 !/launcher_publish.py
+!/REVAMPED-SHELLS.md
 # contributor mode: team members send updates for review; who may is in contributors.json (main branch on GitHub)
 !/launcher_contrib.py
 !/contributors.json
