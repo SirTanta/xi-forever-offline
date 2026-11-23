@@ -83,13 +83,23 @@ def load_state(kit):
         with open(state_path(kit), encoding="utf-8-sig") as handle:
             data = json.load(handle)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except OSError:
+        return {}
+    except ValueError:
+        # a damaged file: keep it (thirdparty-installed.json.bad) instead of letting the next save overwrite the
+        # record of everything that was installed
+        try:
+            os.replace(state_path(kit), state_path(kit) + ".bad")
+        except OSError:
+            pass
         return {}
 
 
 def _save_state(kit, state):
-    with open(state_path(kit), "w", encoding="utf-8", newline="\n") as handle:
+    tmp = state_path(kit) + ".tmp"          # write whole, then swap: a crash never leaves half a file
+    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(state, handle, indent=2)
+    os.replace(tmp, state_path(kit))
 
 
 def target_root(item, kit, ashita, server=None):
