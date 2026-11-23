@@ -461,6 +461,32 @@
       "refresh_if_installed": true
     },
     {
+      "id": "gambits-revamped",
+      "name": "Gambits Revamped (beta)",
+      "author": "Jon Edwards (SirTanta) and the Gambits team",
+      "license": "see NOTICE.md in the download",
+      "homepage": "https://github.com/SirTanta/gambits-revamped-releases",
+      "channel": "beta",
+      "group": "gambits-core",
+      "into": "ashita",
+      "note": "The /gambit window. Beta for review and testing: shown only with 'Get test builds' on. The server part (squad.lua seam and the Gambits engine) comes with the server release, not from here.",
+      "source": {
+        "type": "github_release",
+        "repo": "SirTanta/gambits-revamped-releases",
+        "tag": "latest",
+        "asset": "^GambitsRevamped-[0-9][^/]*[.]zip$",
+        "sha256sums": "SHA256SUMS.txt",
+        "prereleases": true
+      },
+      "files": [
+        [
+          "*/Ashita/addons/GambitsRevamped/",
+          "addons/GambitsRevamped/"
+        ]
+      ],
+      "check": "addons/GambitsRevamped/GambitsRevamped.lua"
+    },
+    {
       "id": "journal",
       "name": "Journal",
       "author": "Kxteel",
