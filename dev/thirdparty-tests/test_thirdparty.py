@@ -89,6 +89,45 @@ class ThirdPartyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tp.resolve(self.items["journal"])
 
+    # ----- channels: a "beta" item is for players who switched on "Get test builds" -----
+    BETA = {"id": "betaaddon", "name": "Beta addon", "author": "a", "license": "l", "homepage": "h", "channel": "beta",
+            "into": "ashita", "check": "addons/betaaddon/betaaddon.lua", "files": [["betaaddon/", "addons/betaaddon/"]],
+            "source": {"type": "github_release", "repo": "x/betaaddon", "tag": "latest", "asset": "^betaaddon\.zip$"}}
+
+    def with_beta(self, test_builds=None):
+        with open(os.path.join(self.kit, "thirdparty.json"), encoding="utf-8-sig") as f:
+            data = json.load(f)
+        data["items"].append(self.BETA)
+        with open(os.path.join(self.kit, "thirdparty.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        if test_builds is not None:
+            with open(os.path.join(self.kit, "config.json"), "w") as f:
+                json.dump({"test_builds": test_builds}, f)
+        return [i["id"] for i in tp.load_manifest(self.kit)]
+
+    def test_beta_hidden_by_default(self):
+        self.assertNotIn("betaaddon", self.with_beta())
+        self.assertNotIn("betaaddon", self.with_beta(False))
+
+    def test_beta_shown_with_test_builds(self):
+        self.assertIn("betaaddon", self.with_beta(True))
+
+    def test_beta_stays_listed_once_installed(self):
+        self.with_beta(False)
+        with open(os.path.join(self.kit, "thirdparty-installed.json"), "w") as f:
+            json.dump({"betaaddon": {"version": "v1.0.0-beta.1"}}, f)
+        self.assertIn("betaaddon", [i["id"] for i in tp.load_manifest(self.kit)])
+
+    def test_beta_takes_the_newest_prerelease(self):
+        releases = [{"tag_name": "v1.0.0-beta.2", "prerelease": True, "assets": [{"name": "betaaddon.zip", "browser_download_url": "u/b2"}]},
+                    {"tag_name": "v0.9.0", "assets": [{"name": "betaaddon.zip", "browser_download_url": "u/s"}]}]
+        fetch = lambda url, timeout=60: json.dumps(releases).encode()
+        self.assertEqual(tp.resolve(self.BETA, fetch)["version"], "v1.0.0-beta.2")
+        self.assertEqual(tp.latest_version(self.BETA, fetch), "v1.0.0-beta.2")
+        stable = dict(self.BETA, channel="stable")
+        one = lambda url, timeout=60: json.dumps(releases[1]).encode()
+        self.assertEqual(tp.latest_version(stable, one), "v0.9.0")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
