@@ -14,6 +14,7 @@ import shutil
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -384,10 +385,39 @@ def ssl_context():
     return _SSL_CONTEXT
 
 
+class RateLimited(RuntimeError):
+    """The site has stopped answering this connection for a while. GitHub gives about 60 requests an hour to someone who
+    is not signed in; the message says when it starts again."""
+
+
+def _rate_limit_message(error, url):
+    """The plain-words message for an HTTP error that means "too many requests", else None."""
+    headers = getattr(error, "headers", None) or {}
+    remaining, retry = headers.get("X-RateLimit-Remaining"), headers.get("Retry-After")
+    if not (error.code == 429 or (error.code == 403 and (remaining == "0" or retry))):
+        return None
+    reset = headers.get("X-RateLimit-Reset")
+    if reset and str(reset).isdigit():
+        at = int(reset)
+    elif retry and str(retry).isdigit():
+        at = time.time() + int(retry)
+    else:
+        at = None
+    who = "GitHub" if "github" in url else "The download site"
+    return (f"{who} is limiting this connection for a while (it allows about 60 requests an hour without signing in)."
+            + (f" It answers again at {time.strftime('%H:%M', time.localtime(at))}." if at else " Try again in an hour."))
+
+
 def _open_url(url, timeout=60, headers=None):
     """The open connection to a URL (use it in a `with`). The one place the launcher's downloads go through."""
     request = urllib.request.Request(url, headers=dict({"User-Agent": USER_AGENT}, **(headers or {})))
-    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
+    try:
+        return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
+    except urllib.error.HTTPError as error:
+        message = _rate_limit_message(error, url)
+        if message:
+            raise RateLimited(message) from error
+        raise
 
 
 def _get(url, timeout=60):
@@ -991,8 +1021,10 @@ def uninstall(item, kit, ashita, server=None, log=print):
     return removed
 
 
-def latest_version(item, fetch=_get):
-    """The newest release tag for a GitHub release item (to offer an update), or None."""
+def latest_version(item, fetch=_get, strict=False):
+    """The newest release tag for a GitHub release item (to offer an update), or None. An answer that could not be had
+    is None, except that "GitHub is limiting this connection" is always raised (RateLimited), and with strict=True every
+    error is."""
     source = item["source"]
     if source["type"] != "github_release":
         return None
@@ -1003,8 +1035,52 @@ def latest_version(item, fetch=_get):
             releases = [r for r in json.loads(fetch(API + source["repo"] + "/releases?per_page=20")) if not r.get("draft")]
             return releases[0]["tag_name"] if releases else None
         return json.loads(fetch(API + source["repo"] + "/releases/latest")).get("tag_name")
+    except RateLimited:
+        raise
     except Exception:
+        if strict:
+            raise
         return None
+
+
+def installed_versions(items, kit, ashita, server=None, state=None):
+    """{item id: installed version text} for the installed items whose newest version can be looked up (GitHub releases)."""
+    state = load_state(kit) if state is None else state
+    out = {}
+    for item in items:
+        if item.get("source", {}).get("type") != "github_release":
+            continue
+        installed, version = status(item, kit, ashita, state, server=server)
+        if installed:
+            out[item["id"]] = version
+    return out
+
+
+def check_updates(items, versions, fetch=_get):
+    """Asks GitHub which installed downloads have a newer release: ({item id: newer tag}, [what went wrong]).
+    `versions` is installed_versions(). Items that are not installed are not asked about; one answer is
+    asked for once however many items share a repository. When GitHub starts limiting this connection the check stops
+    there and says so (the rest were not checked), instead of showing "nothing newer" for all of them."""
+    newer, problems, answers = {}, [], {}
+
+    def once(url, timeout=60):
+        if url not in answers:
+            answers[url] = fetch(url, timeout)
+        return answers[url]
+    for item in items:
+        if item["id"] not in versions:
+            continue
+        try:
+            tag = latest_version(item, once, strict=True)
+        except RateLimited as error:
+            problems.append(f"{error} The rest were not checked.")
+            break
+        except Exception as error:
+            problems.append(f"{item['name']}: could not look up the newest version ({error}).")
+            continue
+        if tag and tag != versions[item["id"]]:
+            newer[item["id"]] = tag
+    return newer, problems
 
 
 def credits_lines(kit):

@@ -4239,12 +4239,18 @@ class App(tk.Tk):
 
     def check_download_updates(self):
         def work():
-            newer = {}
-            for item in tp.load_manifest(HERE):
-                tag = tp.latest_version(item)
-                if tag:
-                    newer[item["id"]] = tag
-            self.say("Checked the release pages for newer versions.")
+            try:
+                items = tp.load_manifest(HERE)
+                versions = tp.installed_versions(items, HERE, self.ashita, self.cfg.get("server_dir"))
+                newer, problems = tp.check_updates(items, versions)
+            except Exception as e:
+                newer, problems = {}, [f"The check stopped: {e}"]
+            for line in problems:                 # (a limit GitHub sets, no network, ...) said out loud, never "nothing newer"
+                self.say(line)
+            self.say("Checked the release pages for newer versions." if not problems else
+                     "The check for newer versions could not be finished (see above).")
+            if problems:
+                self.after(0, lambda: messagebox.showinfo("Check for newer versions", "\n\n".join(problems)))
             self.after(0, lambda: self.show_downloads(newer))
         threading.Thread(target=work, daemon=True).start()
 

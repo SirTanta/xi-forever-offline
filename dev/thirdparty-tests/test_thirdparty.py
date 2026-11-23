@@ -1,5 +1,5 @@
 """Offline checks for launcher_thirdparty.py: no network, a stand-in GitHub. Run: python test_thirdparty.py"""
-import hashlib, io, json, os, shutil, sys, tempfile, time, unittest, urllib.error, zipfile
+import hashlib, io, json, os, shutil, sys, tempfile, time, unittest, urllib.error, urllib.request, zipfile
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, KIT)
 import launcher_thirdparty as tp
@@ -460,6 +460,101 @@ class ThirdPartyTests(unittest.TestCase):
         tp.install(item, self.kit, self.ash, fetch=fetch, log=said.append, run=run)
         self.assertEqual(len(ran), 2)
         self.assertTrue(any("could not ask Windows" in line for line in said))
+
+    # ---- (v0.3.3 launcher fixes) GitHub's request limit is said out loud ----
+    def http_error(self, code, headers):
+        return urllib.error.HTTPError("https://api.github.com/repos/x/y/releases/latest", code, "x", headers, io.BytesIO(b"{}"))
+
+    def opening(self, error):
+        """urllib's urlopen answers with `error` (raised) for the length of the test."""
+        real = urllib.request.urlopen
+
+        def fail(*args, **kwargs):
+            raise error
+        urllib.request.urlopen = fail
+        self.addCleanup(setattr, urllib.request, "urlopen", real)
+
+    def test_github_limit_is_reported_with_the_time_it_ends(self):
+        reset = int(time.time()) + 1500
+        self.opening(self.http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}))
+        with self.assertRaises(tp.RateLimited) as caught:
+            tp._get("https://api.github.com/repos/x/y/releases/latest")
+        self.assertIn("limiting this connection", str(caught.exception))
+        self.assertIn(time.strftime("%H:%M", time.localtime(reset)), str(caught.exception))
+        self.opening(self.http_error(429, {"Retry-After": "120"}))
+        with self.assertRaises(tp.RateLimited):
+            tp._get("https://api.github.com/repos/x/y/releases/latest")
+
+    def test_other_http_errors_stay_what_they_are(self):
+        for code, headers in ((404, {}), (403, {"X-RateLimit-Remaining": "17"}), (500, {})):
+            self.opening(self.http_error(code, headers))
+            with self.assertRaises(urllib.error.HTTPError):
+                tp._get("https://api.github.com/repos/x/y/releases/latest")
+
+    def test_latest_version_lets_the_limit_through_but_still_hides_other_trouble(self):
+        item = self.items["xiuiplus"]
+
+        def limited(url, timeout=60):
+            raise tp.RateLimited("limit")
+
+        def broken(url, timeout=60):
+            raise OSError("no network")
+        with self.assertRaises(tp.RateLimited):
+            tp.latest_version(item, limited)
+        self.assertIsNone(tp.latest_version(item, broken))
+        with self.assertRaises(OSError):
+            tp.latest_version(item, broken, strict=True)
+
+    def test_check_stops_and_says_why_when_github_limits_it(self):
+        items = [i for i in tp.load_manifest(self.kit) if i["source"]["type"] == "github_release" and i["source"].get("tag") == "latest"]
+        self.assertGreaterEqual(len(items), 2)
+        versions = {i["id"]: "v1" for i in items}
+        asked = []
+
+        def fetch(url, timeout=60):
+            asked.append(url)
+            raise tp.RateLimited("GitHub is limiting this connection for a while.")
+        newer, problems = tp.check_updates(items, versions, fetch)
+        self.assertEqual(newer, {})
+        self.assertEqual(len(asked), 1)                                    # it did not keep knocking
+        self.assertEqual(len(problems), 1)
+        self.assertIn("limiting this connection", problems[0])
+        self.assertIn("The rest were not checked", problems[0])
+
+    def test_check_lists_what_went_wrong_per_item_and_skips_what_is_not_installed(self):
+        items = [i for i in tp.load_manifest(self.kit) if i["source"]["type"] == "github_release" and i["source"].get("tag") == "latest"]
+        first, second = items[0], items[1]
+        asked = []
+
+        def fetch(url, timeout=60):
+            asked.append(url)
+            if first["source"]["repo"] in url:
+                raise OSError("no network")
+            return json.dumps({"tag_name": "v9"}).encode()
+        newer, problems = tp.check_updates(items, {first["id"]: "v1", second["id"]: "v1"}, fetch)
+        self.assertEqual(newer, {second["id"]: "v9"})
+        self.assertEqual(len(problems), 1)
+        self.assertIn(first["name"], problems[0])
+        self.assertEqual(len(asked), 2)                                    # only the two installed items were asked about
+
+    def test_one_answer_is_asked_for_once_per_repository(self):
+        item = self.items["xiuiplus"]
+        twin = dict(item, id="twin", name="Twin")
+        asked = []
+
+        def fetch(url, timeout=60):
+            asked.append(url)
+            return json.dumps({"tag_name": "v9"}).encode()
+        newer, problems = tp.check_updates([item, twin], {"xiuiplus": "v1", "twin": "v1"}, fetch)
+        self.assertEqual((sorted(newer), problems, len(asked)), (["twin", "xiuiplus"], [], 1))
+
+    def test_the_downloads_page_uses_the_checker_and_shows_its_problems(self):
+        with open(os.path.join(KIT, "launcher_gui.pyw"), encoding="utf-8") as handle:
+            source = handle.read()
+        body = source[source.index("def check_download_updates"):source.index("def add_note")]
+        self.assertIn("tp.check_updates(", body)
+        self.assertIn("for line in problems", body)
+        self.assertIn("messagebox.showinfo", body)
 
 
 if __name__ == "__main__":
