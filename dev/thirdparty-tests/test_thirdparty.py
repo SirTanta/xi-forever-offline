@@ -128,6 +128,16 @@ class ThirdPartyTests(unittest.TestCase):
         one = lambda url, timeout=60: json.dumps(releases[1]).encode()
         self.assertEqual(tp.latest_version(stable, one), "v0.9.0")
 
+    def test_pinned_item_is_never_offered_a_newer_version(self):
+        # Chains is pinned to the tested v0.86: asking GitHub for "latest" showed "(newer: ...)" for ever, and
+        # Reinstall / update put v0.86 back
+        asked = []
+        fetch = lambda url, timeout=60: asked.append(url) or b'{"tag_name": "v9.9"}'
+        self.assertEqual(self.items["chains"]["source"]["tag"], "v0.86")
+        self.assertIsNone(tp.latest_version(self.items["chains"], fetch))
+        self.assertEqual(asked, [])
+        self.assertEqual(tp.latest_version(self.items["xiuiplus"], fetch), "v9.9")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

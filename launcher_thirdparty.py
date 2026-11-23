@@ -772,6 +772,8 @@ def latest_version(item, fetch=_get):
     source = item["source"]
     if source["type"] != "github_release":
         return None
+    if source.get("tag", "latest") != "latest":       # pinned to a tested version: nothing newer to offer
+        return None
     try:
         if source.get("prereleases") or channel_of(item) == "beta":
             releases = [r for r in json.loads(fetch(API + source["repo"] + "/releases?per_page=20")) if not r.get("draft")]
