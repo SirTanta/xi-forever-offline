@@ -92,7 +92,7 @@ class ThirdPartyTests(unittest.TestCase):
     # ----- channels: a "beta" item is for players who switched on "Get test builds" -----
     BETA = {"id": "betaaddon", "name": "Beta addon", "author": "a", "license": "l", "homepage": "h", "channel": "beta",
             "into": "ashita", "check": "addons/betaaddon/betaaddon.lua", "files": [["betaaddon/", "addons/betaaddon/"]],
-            "source": {"type": "github_release", "repo": "x/betaaddon", "tag": "latest", "asset": "^betaaddon\.zip$"}}
+            "source": {"type": "github_release", "repo": "x/betaaddon", "tag": "latest", "asset": "^betaaddon[.]zip$"}}
 
     def with_beta(self, test_builds=None):
         with open(os.path.join(self.kit, "thirdparty.json"), encoding="utf-8-sig") as f:
@@ -222,6 +222,28 @@ class ThirdPartyTests(unittest.TestCase):
         self.install_chains({"chains/chains.lua": "x", "chains/old.lua": "y"})
         self.install_chains({"chains/chains.lua": "x2"})
         self.assertEqual(sorted(tp.load_state(self.kit)["chains"]["files"]), ["addons/chains/chains.lua", "addons/chains/old.lua"])
+
+    def test_gambits_revamped_entry_installs_the_addon_only(self):
+        with open(os.path.join(self.kit, "config.json"), "w") as f:
+            json.dump({"test_builds": True, "beta_groups": ["gambits-core"]}, f)
+        item = {i["id"]: i for i in tp.load_manifest(self.kit)}["gambits-revamped"]
+        self.assertEqual(tp.channel_of(item), "beta")
+        top = "GambitsRevamped-1.0.0-abc1234/"
+        zipped = zip_of({top + "Ashita/addons/GambitsRevamped/GambitsRevamped.lua": "addon",
+                         top + "Ashita/addons/GambitsRevamped/helper/x.lua": "x",
+                         top + "server/modules/custom/lua/gambits_own.lua": "engine", top + "README.md": "r"})
+        name = "GambitsRevamped-1.0.0-abc1234.zip"
+        release = {"tag_name": "v1.0.0-beta.1", "prerelease": True,
+                   "assets": [{"name": name, "browser_download_url": "u/z"}, {"name": "SHA256SUMS.txt", "browser_download_url": "u/s"}]}
+        sums = ("%s  %s\n" % (hashlib.sha256(zipped).hexdigest(), name)).encode()
+        fetch = lambda url, timeout=60: json.dumps([release]).encode() if url.startswith(tp.API) else {"u/z": zipped, "u/s": sums}[url]
+        self.assertEqual(tp.install(item, self.kit, self.ash, fetch=fetch, log=lambda m: None), "v1.0.0-beta.1")
+        self.assertTrue(os.path.isfile(os.path.join(self.ash, "addons", "GambitsRevamped", "GambitsRevamped.lua")))
+        self.assertTrue(os.path.isfile(os.path.join(self.ash, "addons", "GambitsRevamped", "helper", "x.lua")))
+        self.assertEqual(sorted(os.listdir(self.ash)), ["addons"])             # the server files stay out of Ashita
+        bad = lambda url, timeout=60: sums if url == "u/s" else (zipped + b"!" if url == "u/z" else fetch(url))
+        with self.assertRaises(RuntimeError):
+            tp.install(item, self.kit, self.ash, fetch=bad, log=lambda m: None)
 
 
 if __name__ == "__main__":
