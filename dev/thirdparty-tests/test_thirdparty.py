@@ -152,6 +152,22 @@ class ThirdPartyTests(unittest.TestCase):
         self.assertEqual(tp.load_state(self.kit), {"a": {"version": "1"}})
         self.assertFalse(os.path.exists(tp.state_path(self.kit) + ".tmp"))
 
+    def test_missing_checksum_file_is_a_clear_refusal(self):
+        release = {"tag_name": "v9", "assets": [{"name": "XIUIplus.dll", "browser_download_url": "u/dll"}]}
+        with self.assertRaises(RuntimeError) as caught:
+            tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, {"u/dll": b"MZ"}), log=lambda m: None)
+        self.assertIn("SHA256SUMS.txt", str(caught.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.ash, "plugins", "XIUIplus.dll")))
+
+    def test_downloaded_zip_is_closed_after_install(self):
+        # on Windows an open zip cannot be deleted: the downloads folder could not be cleaned up
+        url = "https://github.com/AshitaXI/Ashita-v4beta/archive/%s.zip" % self.items["ashita"]["source"]["ref"]
+        data = zip_of({"Ashita-v4beta-x/Ashita-cli.exe": "new"})
+        tp.install(self.items["ashita"], self.kit, self.ash, fetch=self.fake({}, {url: data}), log=lambda m: None)
+        folder = os.path.join(self.kit, "downloads", "ashita")
+        for name in os.listdir(folder):
+            os.remove(os.path.join(folder, name))          # would raise PermissionError on Windows if still open
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
