@@ -82,18 +82,24 @@ def _download(release, pattern, kit, fetch, log, what):
                                                     "release: try again later)."))
     name = names[0]
     log(f"Downloading {name}...")
-    data = fetch(assets[name], timeout=3600)
+    wanted = None
     sums_name = "SHA256SUMS.txt" if IS_WINDOWS else "SHA256SUMS-linux.txt"
     if sums_name in assets:
         sums = fetch(assets[sums_name]).decode("utf-8", "replace")
         wanted = next((line.split()[0].lower() for line in sums.splitlines() if line.strip().endswith(name)), None)
-        if wanted and hashlib.sha256(data).hexdigest() != wanted:
-            raise RuntimeError(f"{name} does not match its published checksum: nothing was changed.")
     folder = os.path.join(kit, "downloads", "updates")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, name)
-    with open(path, "wb") as handle:
-        handle.write(data)
+    import launcher_thirdparty as tp
+    if fetch is tp._get:                  # the real thing: a release zip is hundreds of MB, so it goes straight to disk
+        tp.stream_to_file(assets[name], path, wanted, timeout=3600,
+                          mismatch=f"{name} does not match its published checksum: nothing was changed.")
+    else:                                 # a stand-in fetch (the tests) hands over the bytes
+        data = fetch(assets[name], timeout=3600)
+        if wanted and hashlib.sha256(data).hexdigest() != wanted:
+            raise RuntimeError(f"{name} does not match its published checksum: nothing was changed.")
+        with open(path, "wb") as handle:
+            handle.write(data)
     prune_updates(kit, keep=(path,), log=log)
     return path
 

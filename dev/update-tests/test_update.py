@@ -79,6 +79,40 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(open(exe).read(), "new exe")
         self.assertEqual(open(os.path.join(self.kit, "XI Forever Offline.old.exe")).read(), "old exe")
 
+    # ---- (v0.3.3 launcher fixes) the release zip goes to disk a piece at a time ----
+    def test_release_zip_is_streamed_and_checked(self):
+        data = os.urandom(2 * (1 << 20) + 5)
+        name = "xi-forever-offline-v9.9.9-win64.zip"
+        answers = {"u/zip": data, "u/sums": (hashlib.sha256(data).hexdigest() + "  " + name).encode()}
+        asked = []
+
+        class Response:
+            def __init__(self, body):
+                self.body = io.BytesIO(body)
+            def read(self, size=None):
+                asked.append(size)
+                return self.body.read() if size is None else self.body.read(size)
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+        real = tp._open_url
+        tp._open_url = lambda url, timeout=60, headers=None: Response(answers[url])
+        try:
+            release = {"tag_name": "v9.9.9", "assets": [{"name": name, "browser_download_url": "u/zip"},
+                                                         {"name": "SHA256SUMS.txt", "browser_download_url": "u/sums"}]}
+            path = up._download(release, up.KIT_ASSET, self.kit, tp._get, lambda m: None, "launcher")
+            self.assertEqual(open(path, "rb").read(), data)
+            self.assertTrue(all(size is not None and size <= 1 << 20 for size in asked[-4:]))
+            answers["u/zip"] = data + b"!"                      # a changed file: refused, nothing kept
+            os.remove(path)
+            with self.assertRaises(RuntimeError):
+                up._download(release, up.KIT_ASSET, self.kit, tp._get, lambda m: None, "launcher")
+            self.assertFalse(os.path.exists(path))
+            self.assertFalse(os.path.exists(path + ".part"))
+        finally:
+            tp._open_url = real
+
     # ---- (Hasuko, 2026-11-22) "Update stopped: [WinError 5] Access is denied: ...xifo_theme...mp3.part -> ...mp3"
     def _held(self, names, times=10 ** 6):
         """os.replace as Windows does it for a file another program has open: PermissionError for these targets."""
