@@ -484,7 +484,7 @@
           "addons/GambitsRevamped/"
         ]
       ],
-      "check": "addons/GambitsRevamped/GambitsRevamped.lua"
+      "check": "addons/GambitsRevamped/gr_editor.lua"
     },
     {
       "id": "journal",
