@@ -457,6 +457,14 @@ def resolve(item, fetch=_get):
                     digest = parts[0].lower()
             if not digest:
                 raise RuntimeError(f"{item['name']}: {name} is not listed in {source['sha256sums']}")
+        # every checksum there is for this file: the author's list, GitHub's own record of the upload (the "digest" it
+        # keeps for each release file), and a pin in thirdparty.json. They must agree; the first one found is checked.
+        listed = next((a.get("digest") for a in release.get("assets", []) if a.get("name") == name), None)
+        known = [d.lower() for d in (digest, listed[7:] if str(listed).lower().startswith("sha256:") else None,
+                                     source.get("sha256")) if d]
+        if len(set(known)) > 1:
+            raise RuntimeError(f"{item['name']}: the checksums for {name} do not agree with each other - not installed.")
+        digest = known[0] if known else None
         if source.get("sha512sums"):                 # GE-Proton: one <name>.sha512sum file per download
             sums_names = [n for n in assets if re.search(source["sha512sums"], n)]
             for sums_name in sums_names:
@@ -473,14 +481,16 @@ def resolve(item, fetch=_get):
     if kind == "github_archive":
         ref = source["ref"]
         url = f"https://github.com/{source['repo']}/archive/{ref}.zip"
-        return {"version": ref, "url": url, "name": source["repo"].split("/")[-1] + "-" + ref + ".zip", "sha256": None}
+        return {"version": ref, "url": url, "name": source["repo"].split("/")[-1] + "-" + ref + ".zip",
+                "sha256": (source.get("sha256") or "").lower() or None}      # GitHub builds these on the spot: no list, only a pin
     if kind == "kit":                              # shipped inside the kit folder (no download)
         return {"version": source["version"], "url": "", "name": source["path"], "sha256": source.get("sha256"),
                 "local": source["path"]}
     if kind == "ollama_model":
         return {"version": source["model"], "url": "", "name": source["model"], "sha256": None}
     if kind in ("url", "installer"):
-        return {"version": time.strftime("%Y-%m-%d"), "url": source["url"], "name": source["url"].rsplit("/", 1)[-1], "sha256": None}
+        return {"version": time.strftime("%Y-%m-%d"), "url": source["url"], "name": source["url"].rsplit("/", 1)[-1],
+                "sha256": (source.get("sha256") or "").lower() or None}
     raise ValueError(f"{item['name']} is downloaded from its page by hand: {source.get('url', item.get('homepage'))}")
 
 
@@ -746,6 +756,42 @@ def _extract_with_system_tar(archive_path, dest):
         raise RuntimeError("Unpacking failed: " + (done.stderr or "")[-300:])
 
 
+def _signature_of(path):
+    """(status, who signed it) of a Windows program, from Windows itself (Get-AuthenticodeSignature), or None when
+    Windows' answer could not be had."""
+    import subprocess
+    script = ("$s = Get-AuthenticodeSignature -LiteralPath $env:XIFO_CHECK_PATH; "
+              "[Console]::Out.WriteLine([string]$s.Status); "
+              "if ($s.SignerCertificate) { [Console]::Out.WriteLine($s.SignerCertificate.Subject) }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True,
+                             errors="replace", timeout=120, creationflags=NO_WINDOW, env=dict(os.environ, XIFO_CHECK_PATH=path))
+    except Exception:
+        return None
+    lines = [l.strip() for l in (out.stdout or "").splitlines() if l.strip()]
+    if out.returncode != 0 or not lines:
+        return None
+    return lines[0], (lines[1] if len(lines) > 1 else "")
+
+
+def check_signature(item, path, log=print):
+    """(Windows) An installer item that names its "signer" in thirdparty.json (the company that signs it) is only started
+    when Windows says its signature is valid and is that company's. Nothing is checked when no signer is named, and when
+    Windows can't be asked the installer goes ahead with a note, so a broken check never stops the Visual C++ runtime."""
+    signer = item["source"].get("signer")
+    if not signer or PLATFORM != "windows":
+        return True
+    found = _signature_of(path)
+    if found is None:
+        log(f"{item['name']}: could not ask Windows who signed this installer, starting it without that check.")
+        return True
+    status, subject = found
+    if status != "Valid" or signer.lower() not in subject.lower():
+        raise RuntimeError(f"{item['name']}: the installer is not signed by {signer} "
+                           f"(Windows says: {status}{', ' + subject if subject else ''}) - not started.")
+    return True
+
+
 def clean_download(kit, item_id):
     """Deletes downloads/<id>/ (the file an install fetched and has used). Returns the bytes freed."""
     base = os.path.realpath(os.path.join(kit, "downloads"))
@@ -825,7 +871,11 @@ def _install(item, kit, ashita, fetch, log, server, run, started):
         _save_state(kit, state)
         return found["version"]
     path = download(item, kit, found, fetch)
+    if not found.get("sha256") and not found.get("local"):
+        log(f"{item['name']}: the author publishes no checksum for this file, so it could not be checked against one. "
+            f"Its SHA-256 ({(found.get('sha256_actual') or '')[:16]}...) is saved in thirdparty-installed.json.")
     if item["source"]["type"] == "installer":
+        check_signature(item, path, log=log)
         log(f"{item['name']}: starting its installer.")
         if item["source"].get("wait"):             # quiet installers (Visual C++): wait until done
             import subprocess

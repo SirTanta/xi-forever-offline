@@ -385,6 +385,82 @@ class ThirdPartyTests(unittest.TestCase):
         self.assertEqual(tp.clean_download(self.kit, ""), 0)
         self.assertTrue(os.path.isdir(outside))
 
+    # ---- (v0.3.3 launcher fixes) a checksum for every kind of download there can be one for ----
+    def test_github_own_checksum_is_used_when_the_author_lists_none(self):
+        dll = b"MZ the real dll"
+        release = {"tag_name": "v9", "assets": [{"name": "XIUIplus.dll", "browser_download_url": "u/dll",
+                                                "digest": "sha256:" + hashlib.sha256(dll).hexdigest()}]}
+        item = dict(self.items["xiuiplus"], source=dict(self.items["xiuiplus"]["source"], sha256sums=None))
+        self.assertEqual(tp.resolve(item, self.fake(release, {}))["sha256"], hashlib.sha256(dll).hexdigest())
+        tp.install(item, self.kit, self.ash, fetch=self.fake(release, {"u/dll": dll}), log=lambda m: None)
+        with self.assertRaises(RuntimeError) as caught:
+            tp.install(item, self.kit, self.ash, fetch=self.fake(release, {"u/dll": dll + b"!"}), log=lambda m: None)
+        self.assertIn("does not match its published checksum", str(caught.exception))
+
+    def test_checksums_that_disagree_refuse_the_install(self):
+        dll = b"MZ dll"
+        release = {"tag_name": "v9", "assets": [{"name": "XIUIplus.dll", "browser_download_url": "u/dll", "digest": "sha256:" + "0" * 64},
+                                                {"name": "SHA256SUMS.txt", "browser_download_url": "u/sums"}]}
+        files = {"u/dll": dll, "u/sums": (hashlib.sha256(dll).hexdigest() + "  XIUIplus.dll\n").encode()}
+        with self.assertRaises(RuntimeError) as caught:
+            tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, files), log=lambda m: None)
+        self.assertIn("do not agree", str(caught.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.ash, "plugins", "XIUIplus.dll")))
+
+    def test_a_pin_in_thirdparty_json_is_checked_for_archives_and_urls(self):
+        data = zip_of({"x-main/addons/zz/zz.lua": "ok"})
+        archive = {"id": "zz", "name": "ZZ", "into": "ashita", "files": [["*/addons/", "addons/"]], "check": "addons/zz/zz.lua",
+                   "source": {"type": "github_archive", "repo": "a/b", "ref": "main", "sha256": hashlib.sha256(data).hexdigest().upper()}}
+        url = "https://github.com/a/b/archive/main.zip"
+        self.assertEqual(tp.install(archive, self.kit, self.ash, fetch=self.fake({}, {url: data}), log=lambda m: None), "main")
+        with self.assertRaises(RuntimeError):
+            tp.install(archive, self.kit, self.ash, fetch=self.fake({}, {url: data + b"x"}), log=lambda m: None)
+        pinned_url = {"id": "uu", "name": "UU", "into": "kit", "files": [["uu.bin", "uu.bin"]],
+                      "source": {"type": "url", "url": "https://example.test/uu.bin", "sha256": hashlib.sha256(b"abc").hexdigest()}}
+        with self.assertRaises(RuntimeError):
+            tp.install(pinned_url, self.kit, self.ash, fetch=lambda u, timeout=60: b"abd", log=lambda m: None)
+        tp.install(pinned_url, self.kit, self.ash, fetch=lambda u, timeout=60: b"abc", log=lambda m: None)
+
+    def test_an_unlisted_download_says_so_and_records_its_checksum(self):
+        data = zip_of({"x-main/addons/zz/zz.lua": "ok"})
+        archive = {"id": "zz", "name": "ZZ", "into": "ashita", "files": [["*/addons/", "addons/"]],
+                   "source": {"type": "github_archive", "repo": "a/b", "ref": "main"}}
+        said = []
+        tp.install(archive, self.kit, self.ash, fetch=self.fake({}, {"https://github.com/a/b/archive/main.zip": data}), log=said.append)
+        self.assertTrue(any("publishes no checksum" in line for line in said))
+        self.assertEqual(tp.load_state(self.kit)["zz"]["sha256"], hashlib.sha256(data).hexdigest())
+        # one that has a checksum says nothing of the kind
+        release, files = self.release_for(b"MZ fake dll")
+        said.clear()
+        tp.install(self.items["xiuiplus"], self.kit, self.ash, fetch=self.fake(release, files), log=said.append)
+        self.assertFalse(any("publishes no checksum" in line for line in said))
+
+    def test_manifest_names_microsoft_as_the_signer_of_the_runtimes(self):
+        for key in ("vcredist", "vcredist86"):
+            self.assertEqual(self.items[key]["source"].get("signer"), "Microsoft Corporation")
+
+    def test_installer_signature_is_checked_before_it_is_started(self):
+        item = {"id": "setup", "name": "Setup", "into": "kit",
+                "source": {"type": "installer", "url": "https://example.test/s.exe", "wait": True, "signer": "Microsoft Corporation"}}
+        ran, real = [], tp._signature_of
+        run = lambda cmd: ran.append(cmd) or type("R", (), {"returncode": 0})()
+        fetch = lambda url, timeout=60: b"MZ"
+        self.addCleanup(setattr, tp, "_signature_of", real)
+        tp._signature_of = lambda path: ("Valid", "CN=Microsoft Corporation, O=Microsoft Corporation")
+        tp.install(item, self.kit, self.ash, fetch=fetch, log=lambda m: None, run=run)
+        self.assertEqual(len(ran), 1)
+        for answer in (("Valid", "CN=Someone Else"), ("NotSigned", ""), ("HashMismatch", "CN=Microsoft Corporation")):
+            tp._signature_of = lambda path, answer=answer: answer
+            with self.assertRaises(RuntimeError) as caught:
+                tp.install(item, self.kit, self.ash, fetch=fetch, log=lambda m: None, run=run)
+            self.assertIn("not signed by Microsoft Corporation", str(caught.exception))
+        self.assertEqual(len(ran), 1)                                   # none of the three was started
+        said = []
+        tp._signature_of = lambda path: None                            # Windows could not be asked: goes ahead, says so
+        tp.install(item, self.kit, self.ash, fetch=fetch, log=said.append, run=run)
+        self.assertEqual(len(ran), 2)
+        self.assertTrue(any("could not ask Windows" in line for line in said))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
