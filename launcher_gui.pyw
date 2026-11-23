@@ -3057,16 +3057,25 @@ class UpdatesTab(tk.Frame):
         self.test_builds = tk.BooleanVar(value=bool(self.app.cfg.get("test_builds", False)))
         tk.Checkbutton(bar, text="Get test builds (pre-releases)", variable=self.test_builds, command=self.save_test_builds,
                        bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG).pack(side="left", padx=(8, 0))
+        tk.Label(bar, text="Beta groups:", bg=BG, fg=DIM).pack(side="left", padx=(14, 4))
+        groups = self.app.cfg.get("beta_groups") or ""
+        self.beta_groups = tk.StringVar(value=", ".join(groups) if isinstance(groups, list) else str(groups))
+        entry = tk.Entry(bar, textvariable=self.beta_groups, width=24, bg=PANEL, fg=FG, insertbackground=FG, relief="flat")
+        entry.pack(side="left")
+        entry.bind("<FocusOut>", lambda _e: self.save_test_builds())
+        entry.bind("<Return>", lambda _e: self.save_test_builds())
         self.update_info = None
 
     def save_test_builds(self):
         import json
         self.app.cfg["test_builds"] = bool(self.test_builds.get())
+        self.app.cfg["beta_groups"] = [g.strip() for g in self.beta_groups.get().split(",") if g.strip()]
         try:
             path = os.path.join(HERE, "config.json")
             with open(path, encoding="utf-8-sig") as handle:
                 cfg = json.load(handle)
             cfg["test_builds"] = self.app.cfg["test_builds"]
+            cfg["beta_groups"] = self.app.cfg["beta_groups"]
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(cfg, handle, indent=2)
         except (OSError, ValueError) as e:
