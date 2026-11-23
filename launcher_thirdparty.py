@@ -287,6 +287,9 @@ def resolve(item, fetch=_get):
         name = sorted(names)[0]
         digest = digest512 = None
         if source.get("sha256sums"):
+            if source["sha256sums"] not in assets:
+                raise RuntimeError(f"{item['name']}: release {release.get('tag_name')} has no {source['sha256sums']} "
+                                   f"to check {name} against - not installed.")
             sums = fetch(assets[source["sha256sums"]]).decode("utf-8", "replace")
             for line in sums.splitlines():
                 parts = line.split()
@@ -625,6 +628,7 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
             raise RuntimeError(f"{item['name']} is a Windows installer.")
     else:
         modes = {}
+        archive = None
         if zipfile.is_zipfile(path):
             archive = zipfile.ZipFile(path)
             names = archive.namelist()
@@ -637,9 +641,14 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
             read = lambda name: archive.extractfile(members[name]).read()
         else:
             names = [found["name"]]
-            read = lambda _name: open(path, "rb").read()
+
+            def read(_name):
+                with open(path, "rb") as single:
+                    return single.read()
         moves = plan(item, names)
         if not moves:
+            if archive is not None:
+                archive.close()
             raise RuntimeError(f"{item['name']}: nothing in {found['name']} matched where it should go.")
         keep = tuple(item.get("keep", []))
         # files inside a kept folder that belong to the tool itself and must follow its version (Ashita's own memory
@@ -662,6 +671,8 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
             if modes.get(name, 0) & 0o111:
                 os.chmod(dest, 0o755)
             written += 1
+        if archive is not None:
+            archive.close()                   # (a zip left open stays locked on Windows)
         log(f"{item['name']}: {written} file(s) installed" + (f", {kept} of your own kept" if kept else "")
             + (f"; replaced files saved in {backup}" if os.path.isdir(backup) else "") + ".")
     state = load_state(kit)
