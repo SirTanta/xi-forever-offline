@@ -26,6 +26,8 @@
 !/launcher_hood.py
 !/launcher_thirdparty.py
 !/launcher_setup.py
+!/launcher_revamped.py
+!/REVAMPED-SHELLS.md
 !/launcher_update.py
 !/launcher_publish.py
 # contributor mode: team members send updates for review; who may is in contributors.json (main branch on GitHub)
@@ -118,6 +120,8 @@
 !/addons-src/servermenu/
 !/addons-src/squadpanel/
 !/addons-src/GambitsV2/
+!/addons-src/GambitsRevamped/
+!/addons-src/SquadsRevamped/
 !/addons-src/journal-era/
 
 # ---- server modules (copies kept with the kit) ----
