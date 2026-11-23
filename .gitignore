@@ -24,11 +24,12 @@
 !/launcher_gamepad.py
 !/launcher_theme.py
 !/launcher_hood.py
+!/launcher_revamped.py
 !/launcher_thirdparty.py
 !/launcher_setup.py
-!/REVAMPED-SHELLS.md
 !/launcher_update.py
 !/launcher_publish.py
+!/REVAMPED-SHELLS.md
 # contributor mode: team members send updates for review; who may is in contributors.json (main branch on GitHub)
 !/launcher_contrib.py
 !/contributors.json
