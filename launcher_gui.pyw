@@ -7,6 +7,7 @@ HERE = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.
 sys.path.insert(0, HERE)
 import launcher_core as core
 import launcher_gamepad as gp
+import launcher_revamped as rv
 
 IS_WINDOWS = os.name == "nt"
 UI_FONT, MONO_FONT = core.ui_fonts()
@@ -2629,6 +2630,50 @@ class UpdatesTab(tk.Frame):
         tk.Button(box, text="Run setup again...", command=self.setup_again, bg=PANEL2, fg=FG, relief="flat", padx=12, pady=5,
                   activebackground=BORDER, activeforeground=FG).pack(anchor="w", padx=12, pady=(0, 12))
 
+    # (2026-11-23) the Revamped switch: old Squads / old Gambits off, the Revamped versions on (launcher_revamped.py)
+    def build_revamped(self):
+        box = tk.Frame(self, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        box.pack(fill="x", padx=14, pady=(0, 6))
+        tk.Label(box, text="Revamped Squads and Gambits", bg=PANEL, fg=FG, font=(UI_FONT, 12, "bold")).pack(anchor="w", padx=12, pady=(10, 2))
+        self.revamped_text = tk.StringVar()
+        tk.Label(box, textvariable=self.revamped_text, bg=PANEL, fg=DIM, wraplength=880, justify="left",
+                 font=(UI_FONT, 9)).pack(anchor="w", padx=12, pady=(2, 4))
+        bar = tk.Frame(box, bg=PANEL)
+        bar.pack(anchor="w", padx=12, pady=(0, 12))
+        self.revamped_buttons = []
+        for text, value in (("Use the Revamped versions", "revamped"), ("Use the old versions", "stock")):
+            button = tk.Button(bar, text=text, command=lambda v=value: self.revamped_switch(v), bg=PANEL2, fg=FG, relief="flat",
+                               padx=12, pady=5, activebackground=BORDER, activeforeground=FG)
+            button.pack(side="left", padx=(0, 8))
+            self.revamped_buttons.append(button)
+        self.revamped_refresh()
+
+    def revamped_refresh(self):
+        kit, ashita = HERE, self.app.ashita
+        found = rv.detected(ashita)
+        if not found:
+            self.revamped_text.set("No Revamped Squads or Gambits package is installed, so nothing to switch. The old ones stay as they are.")
+            for button in self.revamped_buttons:
+                button.configure(state="disabled")
+            return
+        names = ", ".join("%s: %s" % (rv.TABLE[c]["label"], {"revamped": "Revamped", "stock": "old"}.get(rv.choice(kit, c), "not chosen")) for c in found)
+        self.revamped_text.set("Revamped is installed. Now: " + names + ". The old add-ons stay installed with their settings; "
+                               "only their lines in the start script are switched, and the change applies at the next launch.")
+        for button in self.revamped_buttons:
+            button.configure(state="normal")
+
+    def revamped_switch(self, value):
+        found = rv.detected(self.app.ashita)
+        if not found:
+            return
+        try:
+            done = rv.choose(HERE, self.app.ashita, found, value)
+        except Exception as e:
+            messagebox.showerror("Revamped", "Could not change the start script: %s" % e)
+            return
+        self.revamped_refresh()
+        messagebox.showinfo("Revamped", ("Done. " if done else "Already set. ") + "Takes effect the next time the game starts.")
+
     def build_clear_ah(self):
         """(delukard, 2026-11-22) An empty auction house for a world that plays without one: switching the simulator
         off only stops new stock, what it listed before stays."""
@@ -2728,6 +2773,8 @@ class UpdatesTab(tk.Frame):
         self.player = bool(app.cfg.get("mariadb_dir"))      # a player install (first-run setup); else this is the dev PC
         if self.player:
             self.build_setup_again()
+        if app.ashita and os.path.isdir(app.ashita):
+            self.build_revamped()
         self.build_clear_ah()
         try:                                                # (2026-11-22, Sunie) the AI hood: only where its switch file is
             import launcher_hood
@@ -3534,6 +3581,7 @@ class App(tk.Tk):
         self.build_ui()
         self.after(200, self.pump)
         self.after(1000, self.lights)
+        self.after(1800, self.revamped_prompt)
         self.after(PICTURE_SECONDS * 1000, self.next_picture)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         if self.cfg.get("game_update_needed"):     # installed with Square Enix's installer: its first update comes first
@@ -4751,6 +4799,7 @@ class App(tk.Tk):
             except Exception as e:
                 self.say(f"Could not apply the graphics settings ({e}) - starting with the boot file as it is.")
         self.apply_gamepad()
+        self.apply_revamped()
         self.say("Starting the game through Ashita...")
         alog = open(os.path.join(LOGS, "ashita.log"), "wb")
         self.logfiles.append(alog)
@@ -4779,6 +4828,35 @@ class App(tk.Tk):
             time.sleep(2)
         self.say("Game closed.")
         self.explain_quick_close(began)
+
+    def apply_revamped(self):
+        """Before every game start: the start scripts follow the saved Revamped choice (launcher_revamped.py)."""
+        try:
+            for line in rv.apply(HERE, self.ashita):
+                self.say("Revamped switch: " + line)
+        except Exception as e:
+            self.say("Could not apply the Revamped choice (%s) - starting with the scripts as they are." % e)
+
+    def revamped_prompt(self):
+        """Once, at launcher start, when a Revamped package (not just a shell) is installed and nothing was chosen."""
+        try:
+            if not self.ashita:
+                return
+            ask = rv.to_ask(HERE, self.ashita)
+            if not ask:
+                return
+            if messagebox.askyesno("Revamped", rv.question(ask) + "\n\nYes: the old ones stop loading and the Revamped ones load at every "
+                                   "start (the old add-ons stay installed). No: nothing changes and this is not asked again; "
+                                   "SYSTEM has a button to switch later."):
+                for line in rv.choose(HERE, self.ashita, ask, "revamped"):
+                    print("Revamped switch: " + line)
+            else:
+                rv.declined(HERE)
+            page = getattr(self, "updates_tab", None)
+            if page is not None and hasattr(page, "revamped_refresh"):
+                page.revamped_refresh()
+        except Exception as e:
+            print("Revamped question skipped: %s" % e)
 
     def apply_game_lang(self, boot):
         """(2026-11-22, Sirloinofbeef) Windows: an EU or JP game is named to the loader and Ashita in the boot file, so
@@ -4906,6 +4984,7 @@ class App(tk.Tk):
             linux.start_game(HERE, self.cfg, self.ashita, boot, log)
             return
         self.apply_game_lang(boot)
+        self.apply_revamped()
         subprocess.Popen([cli, boot], cwd=self.ashita, stdout=log, stderr=subprocess.STDOUT, creationflags=core.NO_WINDOW)
 
     def apply_gamepad(self):
