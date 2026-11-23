@@ -9,6 +9,8 @@
 !/CREDITS.md
 !/LICENSE
 !/config.example.json
+!/era_launcher.py
+!/tests/
 
 # ---- launcher ----
 !/launcher_core.py
