@@ -4065,7 +4065,7 @@ class App(tk.Tk):
             tk.Label(self.dl_rows, text=item["name"], bg=BG, fg=FG, font=(UI_FONT, 10, "bold"), anchor="w").grid(
                 row=row * 2, column=0, sticky="w", pady=(6, 0))
             text = ("installed " + version) if installed else "not installed"
-            if newer and newer.get(item["id"]) and newer[item["id"]] != version:
+            if newer and newer.get(item["id"]) and tp.is_newer(newer[item["id"]], version):
                 text += f"  (newer: {newer[item['id']]})"
             tk.Label(self.dl_rows, text=text, bg=BG, fg=GREEN if installed else DIM, anchor="w").grid(
                 row=row * 2, column=1, sticky="w", padx=10, pady=(6, 0))

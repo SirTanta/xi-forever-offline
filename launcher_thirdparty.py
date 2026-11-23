@@ -1043,6 +1043,36 @@ def latest_version(item, fetch=_get, strict=False):
         return None
 
 
+# ----- which version is newer (2026-11-23) -----
+_PRE_RANK = {"alpha": 0, "beta": 1, "preview": 1, "pre": 1, "rc": 2}
+
+
+def parse_version(text):
+    """A release tag as something that sorts: v1.10.0 -> ((1, 10), (9, 0)); v1.0.0-beta.2 -> ((1,), (1, 2)), which is
+    before v1.0.0 (a finished release is rank 9). None when the text holds no number (main, installed)."""
+    text = str(text or "")
+    mark = re.search(r"(?<![A-Za-z])(alpha|beta|preview|pre|rc)(?![A-Za-z])[-._]?(\d*)", text, re.I)
+    numbers = [int(n) for n in re.findall(r"\d+", text[:mark.start()] if mark else text)]
+    if not numbers:
+        return None
+    while len(numbers) > 1 and numbers[-1] == 0:          # 1.0 and 1.0.0 are the same version
+        numbers.pop()
+    rank = (_PRE_RANK[mark.group(1).lower()], int(mark.group(2) or 0)) if mark else (9, 0)
+    return tuple(numbers), rank
+
+
+def is_newer(tag, have):
+    """Is the release `tag` newer than the installed version `have`? Compared as numbers, so v1.10 is newer than v1.9 and
+    an older release is not offered as an "update". When one of them is not a version number (a branch name, or an
+    install this launcher did not record) any different tag counts as newer, as before."""
+    if not tag:
+        return False
+    a, b = parse_version(tag), parse_version(have)
+    if a is None or b is None:
+        return tag != have
+    return a > b
+
+
 def installed_versions(items, kit, ashita, server=None, state=None):
     """{item id: installed version text} for the installed items whose newest version can be looked up (GitHub releases)."""
     state = load_state(kit) if state is None else state
@@ -1078,7 +1108,7 @@ def check_updates(items, versions, fetch=_get):
         except Exception as error:
             problems.append(f"{item['name']}: could not look up the newest version ({error}).")
             continue
-        if tag and tag != versions[item["id"]]:
+        if tag and is_newer(tag, versions[item["id"]]):
             newer[item["id"]] = tag
     return newer, problems
 

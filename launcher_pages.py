@@ -1207,7 +1207,7 @@ class ListDownloads:
         """Newer version (when the last check found one), the install or update button, the item's own extra button, its home page."""
         app = self.app
         newest = self.newer.get(item["id"])
-        if newest and newest != version:
+        if newest and G.tp.is_newer(newest, version):
             tk.Label(parent, text=f"newer: {newest}", bg=bg, fg=GOLD, font=(UI_FONT, 8, "bold")).pack(side="left", padx=(0, 8))
         if item["source"]["type"] == "page":
             label = "Open download page"

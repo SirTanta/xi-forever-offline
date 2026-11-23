@@ -556,6 +556,56 @@ class ThirdPartyTests(unittest.TestCase):
         self.assertIn("for line in problems", body)
         self.assertIn("messagebox.showinfo", body)
 
+    # ---- (v0.3.3 launcher fixes) versions are compared as versions, not with "is different" ----
+    def test_a_newer_release_is_newer_and_an_older_one_is_not(self):
+        newer = [("v1.10", "v1.9"), ("v0.86", "v0.85"), ("v2.0.0", "v1.99.9"), ("1.4.4", "1.4.3"), ("GE-Proton11-12", "GE-Proton11-11"),
+                 ("v1.0.0", "v1.0.0-beta.2"), ("v1.0.0-rc1", "v1.0.0-beta.9"), ("v1.0.0-beta.10", "v1.0.0-beta.2"),
+                 ("v1.0.1", "v1.0"), ("v1.4.3-1", "v1.4.3")]
+        for tag, have in newer:
+            self.assertTrue(tp.is_newer(tag, have), f"{tag} should be newer than {have}")
+            self.assertFalse(tp.is_newer(have, tag), f"{have} should not be newer than {tag}")
+
+    def test_the_same_version_in_other_spellings_is_not_newer(self):
+        for tag, have in (("v1.0", "v1.0.0"), ("1.4.4", "v1.4.4"), ("v0.86", "v0.86"), ("v1.0.0-beta.2", "v1.0.0-beta.2")):
+            self.assertFalse(tp.is_newer(tag, have), f"{tag} vs {have}")
+            self.assertFalse(tp.is_newer(have, tag), f"{have} vs {tag}")
+
+    def test_a_downgrade_is_not_offered_as_an_update(self):
+        # the old comparison was "is it different": a release page that rolled back, or an author's older tag, showed "(newer: ...)"
+        self.assertFalse(tp.is_newer("v1.8.4", "v1.8.5"))
+        self.assertFalse(tp.is_newer("v2.20", "v2.21"))
+
+    def test_words_that_only_look_like_a_pre_release_marker_are_not_one(self):
+        self.assertEqual(tp.parse_version("Source-v2.1")[1], (9, 0))
+        self.assertEqual(tp.parse_version("Chains-v0.86-Phoenix")[0], (0, 86))
+        self.assertEqual(tp.parse_version("v1.0.0-beta.2"), ((1,), (1, 2)))
+
+    def test_without_numbers_it_stays_as_it_was(self):
+        # a branch name, or an install this launcher did not record: any different tag still counts as newer (and the same one not)
+        self.assertTrue(tp.is_newer("v2", "installed"))
+        self.assertTrue(tp.is_newer("v2", ""))
+        self.assertFalse(tp.is_newer("main", "main"))
+        self.assertFalse(tp.is_newer("", "v1"))
+        self.assertFalse(tp.is_newer(None, "v1"))
+
+    def test_the_check_offers_only_what_is_really_newer(self):
+        a = {"id": "aa", "name": "AA", "source": {"type": "github_release", "repo": "x/aa", "tag": "latest", "asset": "a"}}
+        b = {"id": "bb", "name": "BB", "source": {"type": "github_release", "repo": "x/bb", "tag": "latest", "asset": "b"}}
+        items = [a, b]
+        tags = {a["source"]["repo"]: "v1.8.4", b["source"]["repo"]: "v1.10.0"}
+
+        def fetch(url, timeout=60):
+            repo = next(r for r in tags if r in url)
+            return json.dumps({"tag_name": tags[repo]}).encode()
+        newer, problems = tp.check_updates(items, {a["id"]: "v1.8.5", b["id"]: "v1.9.0"}, fetch)
+        self.assertEqual((newer, problems), ({b["id"]: "v1.10.0"}, []))
+
+    def test_both_download_lists_use_the_same_comparison(self):
+        for name, needle in (("launcher_gui.pyw", "tp.is_newer(newer[item[\"id\"]], version)"),
+                             ("launcher_pages.py", "G.tp.is_newer(newest, version)")):
+            with open(os.path.join(KIT, name), encoding="utf-8") as handle:
+                self.assertIn(needle, handle.read(), name)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
