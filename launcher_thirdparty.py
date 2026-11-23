@@ -858,12 +858,59 @@ def prune_downloads(kit, days=7, log=print, now=None):
     return freed
 
 
-def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None, keep_download=False):
+def remove_stale(item, kit, root, state, wanted, log=print, stamp=None):
+    """An update used to leave behind the files the old version had and the new one does not (a renamed or dropped Lua
+    file keeps loading, or keeps showing in the addon's folder). Removes the files an earlier install of this item put in
+    place (the list kept in thirdparty-installed.json) that are not in `wanted` (the files of the version just installed).
+    Never touches: a file another download also installed, a file inside the item's kept (settings) folders, anything
+    outside the item's folder. Every file is copied to backups/thirdparty/<id>-<time>-old/ first.
+    Returns the list of files removed."""
+    old = (state.get(item["id"]) or {}).get("files") or []
+    if not old or not root:
+        return []
+    norm = lambda path: str(path).replace("\\", "/")
+    wanted = {norm(w) for w in wanted}
+    keep = tuple(norm(k) for k in item.get("keep", []))
+    replace = tuple(norm(r) for r in item.get("replace", []))
+    others = {norm(f) for other, record in state.items() if other != item["id"] and isinstance(record, dict)
+              for f in record.get("files", [])}
+    real = os.path.realpath(root)
+    backup = os.path.join(kit, "backups", "thirdparty", f"{item['id']}-{stamp or time.strftime('%Y%m%d-%H%M%S')}-old")
+    removed, folders = [], set()
+    for rel in old:
+        rel = norm(rel)
+        parts = rel.split("/")
+        full = os.path.realpath(os.path.join(root, *parts))
+        if rel in wanted or rel in others or ".." in parts or not full.startswith(real + os.sep):
+            continue
+        if keep and rel.startswith(keep) and not (replace and rel.startswith(replace)):
+            continue
+        if not os.path.isfile(full):
+            continue
+        os.makedirs(os.path.dirname(os.path.join(backup, *parts)), exist_ok=True)
+        shutil.copy2(full, os.path.join(backup, *parts))
+        os.remove(full)
+        removed.append(rel)
+        folders.add(os.path.dirname(full))
+    for folder in sorted(folders, key=len, reverse=True):          # folders that are empty now
+        while folder.startswith(real + os.sep):
+            try:
+                os.rmdir(folder)
+            except OSError:
+                break
+            folder = os.path.dirname(folder)
+    if removed:
+        log(f"{item['name']}: {len(removed)} file(s) the old version had and this one does not were removed (copies saved in {backup}).")
+    return removed
+
+
+def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None, keep_download=False, remove_old=True):
     """Downloads and installs one item. Returns the version installed. The downloaded file is deleted afterwards
-    (keep_download=True keeps it); an installer that is still open on the player's screen is left alone."""
+    (keep_download=True keeps it); an installer that is still open on the player's screen is left alone. An update also
+    removes the files the old version had and the new one does not (remove_old=False leaves them)."""
     started = []
     try:
-        return _install(item, kit, ashita, fetch, log, server, run, started)
+        return _install(item, kit, ashita, fetch, log, server, run, started, remove_old)
     finally:
         if not keep_download and not started:
             try:
@@ -872,7 +919,7 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None, kee
                 pass
 
 
-def _install(item, kit, ashita, fetch, log, server, run, started):
+def _install(item, kit, ashita, fetch, log, server, run, started, remove_old=True):
     if item["source"]["type"] == "ollama_model":
         pull_model(item["source"]["model"], log=log)
         return item["source"]["model"]
@@ -973,7 +1020,11 @@ def _install(item, kit, ashita, fetch, log, server, run, started):
               "from": found["url"], "at": time.strftime("%Y-%m-%d %H:%M")}
     if item["source"]["type"] != "installer":
         # every file this item put in its folder (an update adds to the list), so uninstall() can take them out again
-        record["files"] = sorted(set(placed) | set((state.get(item["id"]) or {}).get("files", [])))
+        before = set((state.get(item["id"]) or {}).get("files", []))
+        gone = set()
+        if remove_old and before:
+            gone = set(remove_stale(item, kit, root, state, [rel for _name, rel in moves], log=log, stamp=stamp))
+        record["files"] = sorted(set(placed) | (before - gone))
     state[item["id"]] = record
     _save_state(kit, state)
     return found["version"]

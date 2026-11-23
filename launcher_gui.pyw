@@ -4190,7 +4190,8 @@ class App(tk.Tk):
             # (Altair 2026-11-19: Reinstall / update showed nothing, its lines only went to the LOGS panel on the Play page)
             try:
                 version = tp.install(item, HERE, self.ashita, log=self.say, server=self.cfg.get("server_dir"),
-                                     keep_download=bool(self.cfg.get("keep_downloads", False)))
+                                     keep_download=bool(self.cfg.get("keep_downloads", False)),
+                                     remove_old=bool(self.cfg.get("remove_old_files", True)))
                 done = f"{item['name']} {version} is ready."
             except Exception as e:
                 done = f"{item['name']}: not installed ({e})."

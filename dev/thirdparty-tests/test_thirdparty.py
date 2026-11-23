@@ -197,10 +197,10 @@ class ThirdPartyTests(unittest.TestCase):
         for name in os.listdir(folder):
             os.remove(os.path.join(folder, name))          # would raise PermissionError on Windows if still open
 
-    def install_chains(self, files):
+    def install_chains(self, files, **kw):
         release = {"tag_name": "v0.86", "assets": [{"name": "Chains-v0.86-Phoenix.zip", "browser_download_url": "u/z"}]}
         fetch = self.fake(release, {"u/z": zip_of(files)})
-        tp.install(self.items["chains"], self.kit, self.ash, fetch=fetch, log=lambda m: None)
+        tp.install(self.items["chains"], self.kit, self.ash, fetch=fetch, log=lambda m: None, **kw)
 
     def test_uninstall_removes_what_was_installed_and_keeps_the_rest(self):
         self.install_chains({"chains/chains.lua": "x", "chains/data/a.lua": "y"})
@@ -237,8 +237,9 @@ class ThirdPartyTests(unittest.TestCase):
             tp.uninstall(self.items["chains"], self.kit, self.ash, log=lambda m: None)
 
     def test_update_keeps_the_list_of_older_files(self):
+        # (an update that leaves the old file on disk, remove_old=False, keeps it on the list so uninstall still takes it out)
         self.install_chains({"chains/chains.lua": "x", "chains/old.lua": "y"})
-        self.install_chains({"chains/chains.lua": "x2"})
+        self.install_chains({"chains/chains.lua": "x2"}, remove_old=False)
         self.assertEqual(sorted(tp.load_state(self.kit)["chains"]["files"]), ["addons/chains/chains.lua", "addons/chains/old.lua"])
 
     def test_gambits_revamped_entry_installs_the_addon_only(self):
@@ -682,6 +683,72 @@ class ThirdPartyTests(unittest.TestCase):
         quiet = source[source.index("def check_download_updates"):source.index("def check_downloads_quietly")]
         self.assertIn("if quiet:", quiet)
         self.assertIn("force=not quiet", quiet)
+
+    # ---- (v0.3.3 launcher fixes) an update takes out the files the old version had and the new one does not ----
+    def release_chains(self, tag, files):
+        release = {"tag_name": tag, "assets": [{"name": "Chains-v0.86-Phoenix.zip", "browser_download_url": "u/z"}]}
+        return self.fake(release, {"u/z": zip_of(files)})
+
+    def test_an_update_removes_files_the_new_version_dropped_and_backs_them_up(self):
+        item = self.items["chains"]
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v1", {"chains/chains.lua": "one", "chains/old.lua": "gone soon",
+                                                                             "chains/data/a.lua": "a"}), log=lambda m: None)
+        base = os.path.join(self.ash, "addons", "chains")
+        self.assertTrue(os.path.exists(os.path.join(base, "old.lua")))
+        said = []
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v2", {"chains/chains.lua": "two", "chains/data/a.lua": "a2"}),
+                   log=said.append)
+        self.assertEqual(open(os.path.join(base, "chains.lua")).read(), "two")
+        self.assertFalse(os.path.exists(os.path.join(base, "old.lua")))                 # dropped by v2: gone
+        self.assertEqual(sorted(tp.load_state(self.kit)["chains"]["files"]), ["addons/chains/chains.lua", "addons/chains/data/a.lua"])
+        self.assertTrue(any("1 file(s) the old version had" in line for line in said))
+        saved = [os.path.join(top, n) for top, _d, names in os.walk(os.path.join(self.kit, "backups", "thirdparty")) for n in names
+                 if n == "old.lua"]
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].replace("\\", "/").count("-old/") == 1)
+        self.assertEqual(open(saved[0]).read(), "gone soon")
+
+    def test_the_first_update_after_the_list_was_not_kept_removes_nothing(self):
+        item = self.items["chains"]
+        base = os.path.join(self.ash, "addons", "chains")
+        os.makedirs(base)
+        open(os.path.join(base, "mine.lua"), "w").write("the player's own file")
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v1", {"chains/chains.lua": "one"}), log=lambda m: None)
+        self.assertEqual(open(os.path.join(base, "mine.lua")).read(), "the player's own file")
+
+    def test_a_file_another_download_also_put_there_is_not_removed(self):
+        item = self.items["chains"]
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v1", {"chains/chains.lua": "one", "chains/shared.lua": "s"}),
+                   log=lambda m: None)
+        state = tp.load_state(self.kit)
+        state["other"] = {"version": "1", "files": ["addons/chains/shared.lua"]}
+        tp._save_state(self.kit, state)
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v2", {"chains/chains.lua": "two"}), log=lambda m: None)
+        self.assertTrue(os.path.exists(os.path.join(self.ash, "addons", "chains", "shared.lua")))
+
+    def test_settings_folders_and_other_folders_are_never_swept(self):
+        item = dict(self.items["chains"], keep=["addons/chains/settings/"])
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v1", {"chains/chains.lua": "one", "chains/settings/s.xml": "x"}),
+                   log=lambda m: None)
+        state = tp.load_state(self.kit)
+        state["chains"]["files"] += ["addons/chains/settings/s.xml", "../escape.txt"]
+        tp._save_state(self.kit, state)
+        open(os.path.join(os.path.dirname(self.ash), "escape.txt"), "w").write("outside")
+        self.addCleanup(os.remove, os.path.join(os.path.dirname(self.ash), "escape.txt"))
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v2", {"chains/chains.lua": "two"}), log=lambda m: None)
+        self.assertTrue(os.path.exists(os.path.join(self.ash, "addons", "chains", "settings", "s.xml")))      # a kept folder
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(self.ash), "escape.txt")))             # outside its folder
+
+    def test_it_can_be_switched_off(self):
+        item = self.items["chains"]
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v1", {"chains/chains.lua": "one", "chains/old.lua": "x"}),
+                   log=lambda m: None)
+        tp.install(item, self.kit, self.ash, fetch=self.release_chains("v2", {"chains/chains.lua": "two"}), log=lambda m: None,
+                   remove_old=False)
+        self.assertTrue(os.path.exists(os.path.join(self.ash, "addons", "chains", "old.lua")))
+        self.assertIn("addons/chains/old.lua", tp.load_state(self.kit)["chains"]["files"])        # still listed for uninstall
+        with open(os.path.join(KIT, "launcher_gui.pyw"), encoding="utf-8") as handle:
+            self.assertIn('remove_old=bool(self.cfg.get("remove_old_files", True))', handle.read())
 
 
 if __name__ == "__main__":
