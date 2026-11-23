@@ -36,6 +36,8 @@ def world(gambits=None, squads=None, script=SCRIPT, dual=None):
             folder = os.path.join(ash, "addons", name)
             os.makedirs(folder)
             open(os.path.join(folder, name + ".lua"), "w").write("-- addon")
+            if kind == "package":
+                open(os.path.join(folder, rv.MARKERS[comp]), "w").write("-- package")
             if kind == "shell":
                 open(os.path.join(folder, rv.SHELL_MARK), "w").write("{}")
     with open(os.path.join(ash, "scripts", "xiforever.txt"), "w", newline="") as f:
@@ -147,12 +149,55 @@ ok(rv.load(kit)["shell_seen"] == 3 and rv.load(kit)["gambits"] == "stock", "keys
 ok(rv.choice(kit, "gambits") == "stock" and rv.to_ask(kit, ash) == [], "a saved choice is not asked again")
 shutil.rmtree(kit)
 
+# ---- v033: the shared switch file choice.txt (the game side, rv_switch.lua) and the shell add-ons ----
+kit, ash = world(gambits="package", squads="package")
+txt = rv.choice_txt_path(ash)
+ok(rv.read_choice_txt(ash) == {"asked": False, "use": None}, "no choice.txt: never asked")
+os.makedirs(os.path.dirname(txt))
+open(txt, "w").write("asked=1\nuse_revamped=1\n")
+ok(rv.to_ask(kit, ash) == [], "an in-game answer is not asked again in the launcher")
+ok(rv.choice(kit, "gambits") == "revamped" and rv.choice(kit, "squads") == "revamped", "an in-game Yes is a Revamped choice")
+rv.apply(kit, ash, "2026-11-23")
+ok("/addon load GambitsRevamped" in active(ash) and "/addon load Gambits" not in active(ash), "an in-game Yes switches the start script")
+rv.choose(kit, ash, ["gambits", "squads"], "stock")
+ok(rv.read_choice_txt(ash) == {"asked": True, "use": False}, "the launcher writes use_revamped=0 for stock")
+rv.choose(kit, ash, ["gambits"], "revamped")
+ok(rv.read_choice_txt(ash) == {"asked": True, "use": True}, "the launcher writes use_revamped=1 for Revamped")
+shutil.rmtree(kit)
+
+kit, ash = world(gambits="package", squads="package")
+rv.declined(kit, ash)
+ok(rv.read_choice_txt(ash) == {"asked": True, "use": False} and rv.to_ask(kit, ash) == [], "No is written for the game too")
+ok(active(ash) == ["/addon load distance", "/addon load Gambits", "/addon load servermenu", "/addon load autobox", "/addon load followme"],
+   "No changes nothing in the start script")
+shutil.rmtree(kit)
+
+# a shell without its marker file is a shell; a package keeps its own file; shells are copied in once and loaded once
+kit, ash = world()
+for name in ("GambitsRevamped", "SquadsRevamped"):
+    os.makedirs(os.path.join(kit, "addons-src", name))
+    open(os.path.join(kit, "addons-src", name, name + ".lua"), "w").write("-- shell")
+os.makedirs(os.path.join(ash, "addons"), exist_ok=True)
+rv.apply(kit, ash)
+ok(rv.state(ash, "gambits") == "shell" and rv.state(ash, "squads") == "shell" and rv.detected(ash) == [], "shells alone are not packages")
+ok("/addon load GambitsRevamped" in active(ash) and "/addon load SquadsRevamped" in active(ash), "the shells load at start")
+rv.apply(kit, ash)
+ok(active(ash).count("/addon load GambitsRevamped") == 1, "twice does not add them twice")
+ok(rv.to_ask(kit, ash) == [], "shells alone are never asked about")
+open(os.path.join(ash, "addons", "GambitsRevamped", "gr_editor.lua"), "w").write("-- package")
+open(os.path.join(kit, "addons-src", "GambitsRevamped", "GambitsRevamped.lua"), "w").write("-- shell again")
+open(os.path.join(ash, "addons", "GambitsRevamped", "GambitsRevamped.lua"), "w").write("-- the package main file")
+rv.apply(kit, ash)
+ok(open(os.path.join(ash, "addons", "GambitsRevamped", "GambitsRevamped.lua")).read() == "-- the package main file", "a shell is never copied over a package")
+ok(rv.detected(ash) == ["gambits"] and rv.to_ask(kit, ash) == ["gambits"], "the marker file makes it a package and the question is due")
+shutil.rmtree(kit)
+
 # the launcher is wired to it: the prompt at start, the switch before each game start (both ways of starting), the System box
 with open(os.path.join(KIT, "launcher_gui.pyw"), encoding="utf-8") as f:
     gui = f.read()
 ok("self.after(1800, self.revamped_prompt)" in gui, "the question is asked at launcher start")
 ok(gui.count("self.apply_revamped()") == 2, "the scripts follow the choice before each game start")
 ok("self.build_revamped()" in gui and "Use the Revamped versions" in gui and "Use the old versions" in gui, "System has the switch buttons")
-ok("rv.to_ask(HERE, self.ashita)" in gui and "rv.declined(HERE)" in gui, "Yes saves, No is remembered")
+ok("rv.to_ask(HERE, self.ashita)" in gui and "rv.declined(HERE, self.ashita)" in gui, "Yes saves, No is remembered")
 
 print(f"test_revamped: {checks} checks passed")

@@ -4851,7 +4851,7 @@ class App(tk.Tk):
                 for line in rv.choose(HERE, self.ashita, ask, "revamped"):
                     print("Revamped switch: " + line)
             else:
-                rv.declined(HERE)
+                rv.declined(HERE, self.ashita)
             page = getattr(self, "updates_tab", None)
             if page is not None and hasattr(page, "revamped_refresh"):
                 page.revamped_refresh()

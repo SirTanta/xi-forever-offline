@@ -2,7 +2,10 @@
 
 No Tk in here (the launcher's pages and dev\\launcher-tests\\test_revamped.py both use it).
 
-THE FILE (agreed with the shell-add-on lane, the in-game prompt reads and writes the same one):
+THE FILES. The game side (addons-src\\*Revamped\\rv_switch.lua) reads and writes the shared switch:
+    <Ashita>\\config\\addons\\revamped\\choice.txt        asked=1 / use_revamped=1 or 0
+  The launcher imports that file at every start and rewrites it whenever it saves a choice (sync_in / sync_out), so the
+  in-game question and the launcher question are one answer. The launcher detail file is:
     <kit>\\config\\revamped.json        {"squads": "revamped" | "stock", "gambits": "revamped" | "stock", "asked": true}
   - a key that is missing means "no choice yet" (nothing is switched);
   - "asked" is set by the launcher's own question, so No is not asked again at every start;
@@ -19,12 +22,14 @@ THE SWITCH (what a choice does to Ashita\\scripts\\xiforever.txt, and dualbox.tx
   choice is "revamped". A Revamped add-on that is NOT installed is never switched on and the old ones are left alone: the
   switch can not leave you with neither.
 
-WHAT COUNTS AS INSTALLED: Ashita\\addons\\GambitsRevamped\\GambitsRevamped.lua and Ashita\\addons\\SquadsRevamped\\SquadsRevamped.lua.
-A folder holding a file called shell.json is a SHELL (the hook points our packages plug into, no Revamped features of its
-own): the launcher stays silent about shells and does not switch anything for them."""
+WHAT COUNTS AS INSTALLED: Ashita\\addons\\GambitsRevamped\\gr_editor.lua (Gambits package) and
+Ashita\\addons\\SquadsRevamped\\sr_window.lua (Squads package), the marker files the in-game question uses too. A folder
+without its marker (or holding shell.json) is a SHELL: the launcher copies the shells in (install_shells, never over a
+package), loads them once (enable_shells_once), and asks and switches nothing for shells alone."""
 import json
 import os
 import re
+import shutil
 import time
 
 COMPONENTS = ("gambits", "squads")
@@ -35,6 +40,9 @@ TABLE = {
     "squads": {"addon": "SquadsRevamped", "old": ("squadpanel",), "label": "Squads"},
 }
 SHELL_MARK = "shell.json"
+MARKERS = {"gambits": "gr_editor.lua", "squads": "sr_window.lua"}   # a file only the full package has (same as rv_switch.lua)
+CHOICE_TXT = ("config", "addons", "revamped", "choice.txt")
+IGNORE = ("*.before-*", "*.bak")
 TAG = "launcher Revamped switch"
 SCRIPTS = ("xiforever.txt", "phoenixsolo.txt", "dualbox.txt")
 QUESTION = "Turn off the old Squads / old Gambits and use the Revamped versions?"
@@ -70,12 +78,111 @@ def choice(kit, component):
 
 
 def state(ashita_dir, component):
-    """'package' (installed, real), 'shell' (a shell.json is in it) or None."""
+    """'package' (its marker file is there), 'shell' (the add-on is there without it, or holds a shell.json) or None."""
     name = TABLE[component]["addon"]
     folder = os.path.join(ashita_dir, "addons", name)
     if not os.path.isfile(os.path.join(folder, name + ".lua")):
         return None
-    return "shell" if os.path.isfile(os.path.join(folder, SHELL_MARK)) else "package"
+    if os.path.isfile(os.path.join(folder, SHELL_MARK)) or not os.path.isfile(os.path.join(folder, MARKERS[component])):
+        return "shell"
+    return "package"
+
+
+def choice_txt_path(ashita_dir):
+    return os.path.join(ashita_dir, *CHOICE_TXT)
+
+
+def read_choice_txt(ashita_dir):
+    """{'asked': bool, 'use': True/False/None}, the same parse rules as rv_switch.lua."""
+    out = {"asked": False, "use": None}
+    try:
+        with open(choice_txt_path(ashita_dir), encoding="utf-8-sig") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        key, sep, value = line.partition("=")
+        value = value.strip().split()[0] if value.strip() else ""
+        key = key.strip()
+        if sep and key == "asked":
+            out["asked"] = value == "1"
+        elif sep and key == "use_revamped":
+            out["use"] = True if value == "1" else False if value == "0" else None
+    return out
+
+
+def sync_in(kit, ashita_dir):
+    """The in-game answer becomes the launcher's: asked=1 is asked, use_revamped=1 is 'revamped' for components with no choice."""
+    if not ashita_dir:
+        return
+    txt = read_choice_txt(ashita_dir)
+    if not (txt["asked"] or txt["use"] is not None):
+        return
+    data = load(kit)
+    before = json.dumps(data, sort_keys=True)
+    if txt["asked"]:
+        data["asked"] = True
+    if txt["use"] is True:
+        for c in COMPONENTS:
+            if data.get(c) not in ("revamped", "stock"):
+                data[c] = "revamped"
+    if json.dumps(data, sort_keys=True) != before:
+        save(kit, data)
+
+
+def sync_out(kit, ashita_dir):
+    """Writes the shared switch the game reads: asked=1, use_revamped=1 when any component is Revamped."""
+    if not ashita_dir or not os.path.isdir(ashita_dir):
+        return
+    data = load(kit)
+    use = any(data.get(c) == "revamped" for c in COMPONENTS)
+    path = choice_txt_path(ashita_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("asked=1\nuse_revamped=%d\n" % (1 if use else 0))
+    os.replace(tmp, path)
+
+
+def install_shells(kit, ashita_dir):
+    """Copies addons-src\\GambitsRevamped and SquadsRevamped into Ashita, never over a package. Returns the names copied."""
+    copied = []
+    if not os.path.isdir(os.path.join(ashita_dir, "addons")):
+        return copied
+    for c in COMPONENTS:
+        name = TABLE[c]["addon"]
+        src = os.path.join(kit, "addons-src", name)
+        if not os.path.isdir(src) or state(ashita_dir, c) == "package":
+            continue
+        shutil.copytree(src, os.path.join(ashita_dir, "addons", name), dirs_exist_ok=True, ignore=shutil.ignore_patterns(*IGNORE))
+        copied.append(name)
+    return copied
+
+
+def enable_shells_once(ashita_dir):
+    """Adds '/addon load <shell>' to the main start script once per install, so the in-game question can appear when a
+    package comes. A shell the player switches off later stays off (marker file). Returns the names added."""
+    marker = os.path.join(ashita_dir, "config", "addons", "revamped", "shells-enabled-once.txt")
+    if os.path.exists(marker):
+        return []
+    added = []
+    for path in _scripts(ashita_dir)[:1]:
+        lines, eol = _read(path)
+        changed = False
+        for c in COMPONENTS:
+            name = TABLE[c]["addon"]
+            if not os.path.isdir(os.path.join(ashita_dir, "addons", name)):
+                continue
+            if _set_line(lines, name, True, "", True) is None:
+                _after(lines, [o.lower() for o in TABLE[c]["old"]] + ["servermenu"], "/addon load " + name)
+                changed = True
+                added.append(name)
+        if changed:
+            _write(path, lines, eol)
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+    return added
 
 
 def detected(ashita_dir):
@@ -85,6 +192,7 @@ def detected(ashita_dir):
 
 def to_ask(kit, ashita_dir):
     """The components the launcher should ask about now: a package is installed, nothing was chosen, never asked."""
+    sync_in(kit, ashita_dir)
     if load(kit).get("asked"):
         return []
     return [c for c in detected(ashita_dir) if choice(kit, c) is None]
@@ -162,9 +270,14 @@ def apply(kit, ashita_dir, date=None):
     if not ashita_dir or not os.path.isdir(ashita_dir):
         return []
     date = date or time.strftime("%Y-%m-%d")
+    messages = []
+    for name in install_shells(kit, ashita_dir):
+        messages.append("Revamped shell add-on installed: " + name)
+    for name in enable_shells_once(ashita_dir):
+        messages.append("Revamped shell add-on loads at start: " + name)
+    sync_in(kit, ashita_dir)
     data = load(kit)
     offs = [x for x in data.get("off", []) if isinstance(x, str)]
-    messages = []
     for component in COMPONENTS:
         want = data.get(component)
         if want not in ("revamped", "stock"):
@@ -214,11 +327,13 @@ def choose(kit, ashita_dir, components, value, date=None):
             data[c] = value
     data["asked"] = True
     save(kit, data)
+    sync_out(kit, ashita_dir)
     return apply(kit, ashita_dir, date)
 
 
-def declined(kit):
-    """No: nothing is chosen or switched, and the question is not asked again."""
+def declined(kit, ashita_dir=None):
+    """No: nothing is chosen or switched, and the question is not asked again (in game either)."""
     data = load(kit)
     data["asked"] = True
     save(kit, data)
+    sync_out(kit, ashita_dir)
