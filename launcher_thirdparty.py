@@ -60,13 +60,32 @@ def channel_of(item):
     return "beta" if item.get("channel") == "beta" else "stable"
 
 
+def beta_groups(kit):
+    """The beta groups the player signed up for ("beta_groups" in config.json, a list or 'a, b'), lower case."""
+    try:
+        with open(os.path.join(kit, "config.json"), encoding="utf-8-sig") as handle:
+            value = json.load(handle).get("beta_groups") or []
+    except (OSError, ValueError, AttributeError):
+        return set()
+    if isinstance(value, str):
+        value = value.split(",")
+    return {str(v).strip().lower() for v in value if str(v).strip()}
+
+
 def for_channel(items, kit, test_builds=None):
+    """Stable items always. A beta item only with 'Get test builds' on and, when it names a "group", only if the player
+    signed up for that group (beta_groups); an item that is installed stays listed so it can be updated or removed."""
     if test_builds is None:
         test_builds = test_builds_on(kit)
-    if test_builds:
-        return list(items)
     state = load_state(kit)
-    return [i for i in items if channel_of(i) != "beta" or i["id"] in state]
+    groups = beta_groups(kit)
+    out = []
+    for item in items:
+        if channel_of(item) != "beta" or item["id"] in state:
+            out.append(item)
+        elif test_builds and (not item.get("group") or str(item["group"]).lower() in groups):
+            out.append(item)
+    return out
 
 
 def load_manifest(kit, platform=None, test_builds=None):
