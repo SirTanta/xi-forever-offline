@@ -138,6 +138,20 @@ class ThirdPartyTests(unittest.TestCase):
         self.assertEqual(asked, [])
         self.assertEqual(tp.latest_version(self.items["xiuiplus"], fetch), "v9.9")
 
+    def test_damaged_state_is_kept_not_overwritten(self):
+        path = tp.state_path(self.kit)
+        with open(path, "w") as f:
+            f.write('{"server": {"version": "v1"')           # cut off mid-write
+        self.assertEqual(tp.load_state(self.kit), {})
+        self.assertFalse(os.path.exists(path))
+        with open(path + ".bad") as f:
+            self.assertIn("server", f.read())
+
+    def test_state_save_leaves_no_temp_file(self):
+        tp._save_state(self.kit, {"a": {"version": "1"}})
+        self.assertEqual(tp.load_state(self.kit), {"a": {"version": "1"}})
+        self.assertFalse(os.path.exists(tp.state_path(self.kit) + ".tmp"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
