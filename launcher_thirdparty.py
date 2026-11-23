@@ -657,6 +657,7 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
         stamp = time.strftime("%Y%m%d-%H%M%S")
         backup = os.path.join(kit, "backups", "thirdparty", f"{item['id']}-{stamp}")
         written = kept = 0
+        placed = []
         for name, rel in moves:
             dest = os.path.join(root, rel)
             if os.path.exists(dest):
@@ -671,15 +672,62 @@ def install(item, kit, ashita, fetch=_get, log=print, server=None, run=None):
             if modes.get(name, 0) & 0o111:
                 os.chmod(dest, 0o755)
             written += 1
+            placed.append(rel.replace("\\", "/"))
         if archive is not None:
             archive.close()                   # (a zip left open stays locked on Windows)
         log(f"{item['name']}: {written} file(s) installed" + (f", {kept} of your own kept" if kept else "")
             + (f"; replaced files saved in {backup}" if os.path.isdir(backup) else "") + ".")
     state = load_state(kit)
-    state[item["id"]] = {"version": found["version"], "file": found["name"], "sha256": found.get("sha256_actual"),
-                         "from": found["url"], "at": time.strftime("%Y-%m-%d %H:%M")}
+    record = {"version": found["version"], "file": found["name"], "sha256": found.get("sha256_actual"),
+              "from": found["url"], "at": time.strftime("%Y-%m-%d %H:%M")}
+    if item["source"]["type"] != "installer":
+        # every file this item put in its folder (an update adds to the list), so uninstall() can take them out again
+        record["files"] = sorted(set(placed) | set((state.get(item["id"]) or {}).get("files", [])))
+    state[item["id"]] = record
     _save_state(kit, state)
     return found["version"]
+
+
+def uninstall(item, kit, ashita, server=None, log=print):
+    """Removes the files this launcher installed for an item (the list kept in thirdparty-installed.json), after copying
+    them to backups/thirdparty/<id>-uninstall-<time>/. Settings kept from your own folders are not on the list, so they stay.
+    Returns the number of files removed."""
+    if item.get("required"):
+        raise RuntimeError(f"{item['name']} is needed by the launcher and can't be removed here.")
+    state = load_state(kit)
+    files = (state.get(item["id"]) or {}).get("files")
+    if not files:
+        raise RuntimeError(f"{item['name']}: no list of installed files was kept (it was installed by hand or by an older "
+                           "launcher). Delete its folder yourself.")
+    root = target_root(item, kit, ashita, server)
+    if not root:
+        raise RuntimeError("Set the " + ("server" if item.get("into") == "server" else "Ashita") + " folder first.")
+    real = os.path.realpath(root)
+    backup = os.path.join(kit, "backups", "thirdparty", f"{item['id']}-uninstall-{time.strftime('%Y%m%d-%H%M%S')}")
+    removed, folders = 0, set()
+    for rel in files:
+        parts = rel.split("/")
+        full = os.path.realpath(os.path.join(root, *parts))
+        if ".." in parts or not full.startswith(real + os.sep):
+            raise RuntimeError(f"{item['name']}: refusing to remove outside its folder ({rel})")
+        if not os.path.isfile(full):
+            continue
+        os.makedirs(os.path.dirname(os.path.join(backup, *parts)), exist_ok=True)
+        shutil.copy2(full, os.path.join(backup, *parts))
+        os.remove(full)
+        removed += 1
+        folders.add(os.path.dirname(full))
+    for folder in sorted(folders, key=len, reverse=True):          # empty folders the item left behind
+        while folder.startswith(real + os.sep):
+            try:
+                os.rmdir(folder)
+            except OSError:
+                break
+            folder = os.path.dirname(folder)
+    del state[item["id"]]
+    _save_state(kit, state)
+    log(f"{item['name']}: {removed} file(s) removed" + (f"; copies saved in {backup}" if removed else "") + ".")
+    return removed
 
 
 def latest_version(item, fetch=_get):
