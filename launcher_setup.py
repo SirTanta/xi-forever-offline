@@ -979,11 +979,6 @@ def run_setup(kit, choices, tp, log=print, fetch=None, run=subprocess.run, popen
             except Exception as problem:             # an optional add-on never stops the setup
                 log(f"{item['name']} was not installed ({problem}); get it later on the Downloads tab.")
     install_own_addons(kit, ashita)
-    try:                                              # (v0.3.3) the Revamped shells, never over a Revamped package
-        import launcher_revamped
-        launcher_revamped.install_shells(kit, ashita)
-    except Exception as problem:
-        log(f"The Revamped shells were not installed ({problem}); they come with the next start.")
     if choices.get("era_dats", True):                 # Phoenix's era game files, with a backup of the originals
         try:
             if not tp.status(items["eradats"], kit, ashita)[0]:

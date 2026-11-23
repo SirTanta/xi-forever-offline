@@ -18,11 +18,8 @@ What it prepares: Gambits Revamped (the full Gambits editor and engine) and Squa
 |---|---|
 | `addons-src/GambitsRevamped/` (`GambitsRevamped.lua`, `rv_switch.lua`) | new shell |
 | `addons-src/SquadsRevamped/` (`SquadsRevamped.lua`, `rv_switch.lua`) | new shell, same `rv_switch.lua` byte for byte |
-| `launcher_revamped.py` | new: reads and writes the switch, copies the shells (never over a package), loads them once, takes the old add-ons out of the start script after a Yes |
-| `launcher_gui.pyw` | 5 lines: calls `launcher_revamped.apply` once at start, inside a try so a failure never stops the launch |
-| `launcher_setup.py` | 5 lines: the first-time setup also copies the shells |
-| `launcher_core.py` | the two names are listed as ours on the Addons page (not removable) |
-| `dev/revamped-tests/test_revamped_shells.py`, `dev/launcher-tests/test_launcher_revamped.py` | tests |
+| (launcher side) | `launcher_revamped.py` and the launcher hooks live on branch `v033/launcher` (SirTanta/xi-forever-offline): it installs these shells, loads them once, reads and writes the same `choice.txt`, and drops the old add-ons from the start script after a Yes. This branch is the game side only. |
+| `dev/revamped-tests/test_revamped_shells.py` | tests (Lua through lupa: silent, no command, reads the switch, question only with a package) |
 
 ## Turn it off or revert
 
@@ -32,7 +29,7 @@ What it prepares: Gambits Revamped (the full Gambits editor and engine) and Squa
 
 ## Test steps
 
-Automated (no game needed): `python dev/revamped-tests/test_revamped_shells.py` expects `Ran 10 tests ... OK`; `python dev/launcher-tests/test_launcher_revamped.py` expects `24 passed, 0 failed`.
+Automated (no game needed): `python dev/revamped-tests/test_revamped_shells.py` expects `Ran 10 tests ... OK`.
 
 In game (needs only the game and the launcher). Use a throw-away copy of the kit, not a live install.
 

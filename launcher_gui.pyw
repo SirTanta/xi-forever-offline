@@ -4514,11 +4514,6 @@ class App(tk.Tk):
                                                  log=self.say)
             except Exception as e:
                 self.say(f"Could not turn Tetra Master on ({e}) - starting anyway.")
-            try:                              # (v0.3.3) the Revamped shells and the saved Revamped switch (launcher_revamped.py)
-                import launcher_revamped
-                launcher_revamped.apply(HERE, cfg["ashita_dir"], cfg.get("ashita_boot", "phoenixsolo.ini"), log=self.say)
-            except Exception as e:
-                self.say(f"Could not set up the Revamped shells ({e}) - starting anyway.")
             try:                              # era game files an FFXI update wrote over (Yumainai, Altair 2026-11-19)
                 for line in launcher_setup.check_era_dats(HERE, cfg.get("ffxi_client_dir", ""), log=self.say):
                     self.say(line)
