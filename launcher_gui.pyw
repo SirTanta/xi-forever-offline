@@ -1773,7 +1773,7 @@ class RatesTab(tk.Frame):
         for k in (3, 1, 4, 5, 34, 35, 6, 7, 8, 9, 10, 11, 12, 13, 14, 28, 36, 37, 38, 39):   # (28: bots pass all loot)
             R[k], row = row, row + 1
         row = header("Squad and AI", row)
-        for k in (15, 16, 19, 26, 29, 27, 21, 22, 17):   # (26: squad gear, you keep the item; 29: all gear; 27: training dummies)
+        for k in (15, 16, 19, 26, 29, 27, 21, 22, 17, 40):   # (26: squad gear, you keep the item; 29: all gear; 27: training dummies; 40: buff range)
             R[k], row = row, row + 1
         self.all_crafts = tk.BooleanVar(value=rates.get("all_crafts", True))
         tk.Checkbutton(inner, text="Every craft can reach 100 (off = only one, like the retail rule)", variable=self.all_crafts, bg=BG, fg=FG,
@@ -1844,6 +1844,10 @@ class RatesTab(tk.Frame):
         self.squad_call_cooldown = tk.StringVar(value=str(rates.get("squad_call_cooldown", 5)))
         ttk.Spinbox(inner, from_=0, to=30, increment=1, textvariable=self.squad_call_cooldown, width=8).grid(
             row=R[16], column=1, padx=6, pady=2)
+        tk.Label(inner, text="Buff range (retail or extended)", bg=BG, fg=FG, anchor="w", width=38).grid(row=R[40], column=0, sticky="w", padx=6, pady=2)
+        self.buff_range = tk.StringVar(value=rates.get("buff_range", "retail") if rates.get("buff_range") in core.BUFF_RANGES else "retail")
+        ttk.Combobox(inner, values=list(core.BUFF_RANGES), state="readonly", textvariable=self.buff_range, width=8).grid(
+            row=R[40], column=1, padx=6, pady=2)
         # One time per server: once a PLAY has used it, the switch is gone for good
         self.head_start_done = bool(rates.get("bots_head_start_done", False))
         self.bots_head_start = tk.BooleanVar(value=bool(rates.get("bots_head_start", False)) and not self.head_start_done)
@@ -2041,7 +2045,7 @@ class RatesTab(tk.Frame):
                  "event_harvest", "event_starlight", "event_egg_hunt", "event_horro") + tuple(core.EXTRAS_KEYS)
     TEXT_KEYS = (("crowds_per_zone", "crowds_size"), ("crowds_chat_amount", "crowds_chat_amount"),
                  ("crowds_field_parties", "crowds_field_parties"), ("bots_roster", "bots_roster"), ("bots_online", "bots_online"),
-                 ("bots_growth", "bots_growth"), ("squad_call_cooldown", "squad_call_cooldown"))
+                 ("bots_growth", "bots_growth"), ("buff_range", "buff_range"), ("squad_call_cooldown", "squad_call_cooldown"))
 
     def apply_values(self, values):
         """Puts a whole set of settings (a loaded profile) into the tab. Nothing is saved until PLAY."""
@@ -2139,6 +2143,8 @@ class RatesTab(tk.Frame):
         rates["bots"] = bool(self.bots.get())
         growth = self.bots_growth.get()
         rates["bots_growth"] = growth if growth in ("off", "realistic", "fast") else "realistic"
+        buff = self.buff_range.get()
+        rates["buff_range"] = buff if buff in core.BUFF_RANGES else "retail"
         for key, var, lo, hi, default in (("bots_roster", self.bots_roster, 0, 600, 100), ("bots_online", self.bots_online, 0, 550, 50)):
             try:
                 rates[key] = max(lo, min(hi, int(float(var.get()))))

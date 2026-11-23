@@ -254,6 +254,19 @@ S("training_dummies", "rules", "Squad", SWITCH, "Training dummies",
   tip="For testing: !sandbox puts dummies of level 1 to 99 in Rolanberry Fields that never die and never attack. "
       "Off = no dummies.")
 
+# ---------------------------------------------------------------- Rules > Party buffs (2026-11-23)
+BUFF_RANGE_WARNING = ("Extended keeps the old party-wide reach: buffs land on every party member and squad mate at any distance. "
+                      "Some add-ons that move your party automatically (positioning, songs, rolls, healer placement) may not "
+                      "work with Retail, and that is the reason to pick Extended. Retail is recommended.")
+BUFF_RANGE_NOTE = ("Retail: a buff lands only on mates standing inside the effect's radius, like real players, so positioning "
+                   "matters. Extended: it lands on everyone in the party, wherever they stand, so placement has no effect.")
+S("buff_range", "rules", "Party buffs", CHOICE, "Buff range",
+  options=(("retail", "Retail (recommended)"), ("extended", "Extended")),
+  tip="Retail: trusts, squad mates and pets are covered by party buffs (Protectra, Curaga, songs, rolls, Warcry) only inside "
+      "the effect's radius, like real players, and cast at the normal spell range. Gambits and Squads Revamped movement is "
+      "designed for Retail range. Extended is supported for buffs only; positioning is not tuned for it."
+      "\n\n" + BUFF_RANGE_WARNING + "\n\n" + BUFF_RANGE_NOTE)
+
 # ---------------------------------------------------------------- Era: the dev PC only (players are locked to the era values)
 S("main.MAX_LEVEL", "era", "Era", NUMBER, "Level cap", dev=True, step=1)
 S("era_exp", "era", "Era", SWITCH, "Aht Urhgan-era experience tables", dev=True,
@@ -280,7 +293,7 @@ S("main.SPARKS_RATE", "era", "Out-of-era content", RATE, "RoE sparks", dev=True,
 LAYOUT = {
     "world": (("Town crowds", "Field parties"), ("Bot players", "Auction house", "Conquest"), ("AI chat", "Seasonal events")),
     "rules": (("Experience and fame", "Notorious monsters", "Battle", "Damage"), ("Loot and gil", "Travel", "Squad", "Expansions"),
-              ("Skills and crafting", "Comforts", "Tetra Master")),
+              ("Skills and crafting", "Comforts", "Tetra Master", "Party buffs")),
     "squad": (("Squad rules",),),
     "era": (("Era",), ("Later expansions",), ("Out-of-era content",)),
 }
