@@ -4036,6 +4036,9 @@ class App(tk.Tk):
                           command=lambda i=item: self.remove_ollama(i)).grid(row=row * 2 + 1, column=2, sticky="w")
             link = tk.Label(self.dl_rows, text="home page", bg=BG, fg=ACCENT, cursor="hand2")
             link.grid(row=row * 2, column=3, sticky="w", padx=10, pady=(6, 0))
+            if installed and not item.get("required") and (state.get(item["id"]) or {}).get("files"):
+                tk.Button(self.dl_rows, text="Uninstall", relief="flat", bg=PANEL, fg=FG, padx=10,
+                          command=lambda i=item: self.uninstall_download(i)).grid(row=row * 2, column=4, sticky="w", pady=(6, 0))
             link.bind("<Button-1>", lambda e, url=item["homepage"]: self.open_url(url))
             info = f"by {item['author']} - license: {item['license']}" + (f" - {item['note']}" if item.get("note") else "")
             # (the description spans the name and status columns only: across all four it was drawn over the
@@ -4137,6 +4140,19 @@ class App(tk.Tk):
             self.after(0, self.show_downloads)
             self.after(0, lambda: messagebox.showinfo("Add-ons", done))
         threading.Thread(target=work, daemon=True).start()
+
+    def uninstall_download(self, item):
+        if self.running:
+            messagebox.showinfo("Downloads", "Close the game first.")
+            return
+        if not messagebox.askyesno("Downloads", f"Remove {item['name']}? The files it installed are copied to backups\\thirdparty first; "
+                                   "your own settings and files are left alone."):
+            return
+        try:
+            tp.uninstall(item, HERE, self.ashita, server=self.cfg.get("server_dir"), log=self.say)
+        except Exception as e:
+            messagebox.showinfo("Downloads", f"{item['name']}: not removed ({e}).")
+        self.show_downloads()
 
     def apply_download_patch(self, item):
         try:

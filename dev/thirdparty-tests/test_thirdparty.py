@@ -168,6 +168,50 @@ class ThirdPartyTests(unittest.TestCase):
         for name in os.listdir(folder):
             os.remove(os.path.join(folder, name))          # would raise PermissionError on Windows if still open
 
+    def install_chains(self, files):
+        release = {"tag_name": "v0.86", "assets": [{"name": "Chains-v0.86-Phoenix.zip", "browser_download_url": "u/z"}]}
+        fetch = self.fake(release, {"u/z": zip_of(files)})
+        tp.install(self.items["chains"], self.kit, self.ash, fetch=fetch, log=lambda m: None)
+
+    def test_uninstall_removes_what_was_installed_and_keeps_the_rest(self):
+        self.install_chains({"chains/chains.lua": "x", "chains/data/a.lua": "y"})
+        mine = os.path.join(self.ash, "addons", "chains", "my-notes.txt")
+        with open(mine, "w") as f:
+            f.write("mine")
+        self.assertEqual(tp.uninstall(self.items["chains"], self.kit, self.ash, log=lambda m: None), 2)
+        self.assertFalse(os.path.exists(os.path.join(self.ash, "addons", "chains", "chains.lua")))
+        self.assertTrue(os.path.exists(mine))                      # not ours: stays
+        self.assertNotIn("chains", tp.load_state(self.kit))
+        saved = os.listdir(os.path.join(self.kit, "backups", "thirdparty"))
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].startswith("chains-uninstall-"))
+
+    def test_uninstall_leaves_no_empty_folders(self):
+        self.install_chains({"chains/chains.lua": "x", "chains/data/a.lua": "y"})
+        tp.uninstall(self.items["chains"], self.kit, self.ash, log=lambda m: None)
+        self.assertFalse(os.path.exists(os.path.join(self.ash, "addons", "chains")))
+
+    def test_uninstall_refuses_without_a_record_and_for_required_items(self):
+        os.makedirs(os.path.join(self.ash, "addons", "chains"))
+        with self.assertRaises(RuntimeError):
+            tp.uninstall(self.items["chains"], self.kit, self.ash, log=lambda m: None)
+        self.assertTrue(os.path.isdir(os.path.join(self.ash, "addons", "chains")))
+        with self.assertRaises(RuntimeError):
+            tp.uninstall(self.items["ashita"], self.kit, self.ash, log=lambda m: None)
+
+    def test_uninstall_refuses_a_tampered_list(self):
+        self.install_chains({"chains/chains.lua": "x"})
+        state = tp.load_state(self.kit)
+        state["chains"]["files"] = ["../../outside.txt"]
+        tp._save_state(self.kit, state)
+        with self.assertRaises(RuntimeError):
+            tp.uninstall(self.items["chains"], self.kit, self.ash, log=lambda m: None)
+
+    def test_update_keeps_the_list_of_older_files(self):
+        self.install_chains({"chains/chains.lua": "x", "chains/old.lua": "y"})
+        self.install_chains({"chains/chains.lua": "x2"})
+        self.assertEqual(sorted(tp.load_state(self.kit)["chains"]["files"]), ["addons/chains/chains.lua", "addons/chains/old.lua"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
