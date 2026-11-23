@@ -342,6 +342,29 @@ local function isRefresh(command)
     return command:find('^/say !squad panel') ~= nil or command:find('^/say !squad sheet') ~= nil or command == '/say !actions';
 end
 
+-- The addon channel packet (id 0x1F0): [id][size][sync 2][version 1][reserved 3][text ... NUL][pad to 4]. The size byte is the dword count times two
+-- plus the ninth bit of the id; the client fills the sync bytes. Only used when the server said chan|1.
+local CHANNEL_ID, CHANNEL_MAX = 0x1F0, 120;
+local function channelBytes(text)
+    text = tostring(text or ''):gsub('%c', ' ');
+    if #text > CHANNEL_MAX then text = text:sub(1, CHANNEL_MAX); end
+    local size = math.ceil((8 + #text + 1) / 4) * 4;
+    local b = {};
+    for i = 1, size do b[i] = 0; end
+    b[1], b[2] = CHANNEL_ID % 256, (math.floor(CHANNEL_ID / 256) % 2) + (size / 4) * 2;
+    b[5] = 1;
+    for i = 1, #text do b[8 + i] = text:byte(i); end
+    return b;
+end
+local function channelSend(text)
+    local bytes = channelBytes(text);
+    if bytes[9] == 0 then return false; end   -- (nothing to say)
+    local okM, pm = pcall(function() return AshitaCore:GetPacketManager(); end);
+    if not okM or pm == nil then return false; end
+    if pcall(pm.AddOutgoingPacket, pm, CHANNEL_ID, bytes) then return true; end
+    return pcall(pm.AddOutgoingPacket, pm, CHANNEL_ID, #bytes, bytes) == true;
+end
+
 local SAY_GAP = 2.2;   -- seconds the game needs between two chat lines, or it drops the second and shows it as ">> /say ..."
 
 local function pump(t)
@@ -390,6 +413,8 @@ local function pump(t)
         S.ownAutobox = S.ownAutobox or {};
         S.ownAutobox[#S.ownAutobox + 1] = { text = first.command, at = t };
     end
+    -- the server handles the addon channel packet: a "!" line goes out as that packet, so it is not typed, not echoed, not a chat line
+    if S.channel and first.command:find('^/say !') and channelSend(first.command:sub(6)) then return; end
     pcall(function() chat:QueueCommand(1, first.command); end);
 end
 
@@ -414,6 +439,13 @@ end
 local queueDuo -- (the second window's command batch, defined further down)
 
 local function onLine(payload)
+    -- the server handles the addon channel packet (packets/c2s/0x1f0_addon_channel.h): chan|<version>. An older server never says it.
+    local chanVersion = payload:match('^chan|(%d+)$');
+    if chanVersion then
+        -- (only as the answer to a line this menu sent a moment ago: a player who types the words in chat changes nothing)
+        if now() < S.hideUntil then S.incomingChannel = chanVersion == '1'; end
+        return;
+    end
     -- (1.19) a Blue Mage mate's set blue magic: blu|slot|slots|points|used|auto, blus|slot|id|name|level|points|set, blue|slot
     local bs, bsl, bpt, bused, bauto = payload:match('^blu|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)$');
     if bs then
@@ -451,6 +483,8 @@ local function onLine(payload)
         return;
     end
     if payload == 'end' then
+        S.channel = S.incomingChannel == true;   -- (an older server never says chan|1, so the menu keeps typing)
+        S.incomingChannel = nil;
         S.mates = S.incoming or {};
         reconcileActions();
         S.incoming = nil;
